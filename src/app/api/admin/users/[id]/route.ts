@@ -16,6 +16,7 @@ const PUBLIC_COLUMNS = {
   role: users.role,
   isDemo: users.isDemo,
   cashBalance: users.cashBalance,
+  profitBalance: users.profitBalance,
   accountStatus: users.accountStatus,
   maxTradeAmount: users.maxTradeAmount,
   withdrawalsBlocked: users.withdrawalsBlocked,

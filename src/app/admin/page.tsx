@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { Activity, AlertTriangle, ArrowDownLeft, ArrowLeft, ArrowLeftRight, ArrowRight, ArrowUpRight, Bell, Bot, Check, ChevronDown, ChevronRight, Clock3, Copy as CopyIcon, CreditCard, History, LayoutDashboard, LockKeyhole, Menu, Moon, Pencil, Plus, RefreshCw, Search, Send, ShieldAlert, ShieldCheck, Sparkles, Sun, Trash2, UserPlus, UserRound, UsersRound, Wallet, X } from "lucide-react";
+import { Activity, AlertTriangle, ArrowDownLeft, ArrowLeft, ArrowLeftRight, ArrowRight, ArrowUpRight, Bell, Bot, Check, ChevronDown, ChevronRight, Clock3, Copy as CopyIcon, CreditCard, History, LayoutDashboard, LockKeyhole, Menu, Moon, Pencil, Plus, RefreshCw, Search, Send, ShieldAlert, ShieldCheck, Sparkles, Sun, Trash2, TrendingUp, UserPlus, UserRound, UsersRound, Wallet, X } from "lucide-react";
 import { DEPOSIT_METHODS, depositMethodLabel, type DepositMethod } from "@/lib/deposits";
 import { withdrawalMethodLabel } from "@/lib/withdrawals";
 import { AVATAR_COLORS, RISK_LEVELS, SUBSCRIPTION_DURATION_OPTIONS, type AvatarColor, type RiskLevel } from "@/lib/copy-trading";
@@ -29,7 +29,7 @@ type BotProductRow = { id: string; name: string; description: string; strategy: 
 type PlanRow = { id: string; name: string; description: string; priceWeekly: string; features: string[]; isFeatured: boolean; sortOrder: string; isActive: boolean; activeSubscribers: number; createdAt: string };
 const money = (n: number) => n.toLocaleString("en-US", { style: "currency", currency: "USD" });
 
-type AdminUserRow = { id: string; name: string; email: string; role: string; isDemo: boolean; cashBalance: string; accountStatus: string; maxTradeAmount: string | null; withdrawalsBlocked: boolean; statusReason: string | null; statusUpdatedAt: string | null; createdAt: string; username?: string | null; phone?: string | null; country?: string | null; currency?: string | null };
+type AdminUserRow = { id: string; name: string; email: string; role: string; isDemo: boolean; cashBalance: string; profitBalance: string; accountStatus: string; maxTradeAmount: string | null; withdrawalsBlocked: boolean; statusReason: string | null; statusUpdatedAt: string | null; createdAt: string; username?: string | null; phone?: string | null; country?: string | null; currency?: string | null };
 type SubRow = { id: string; amount: string; startedAt: string; expiresAt: string; botName?: string; traderName?: string; planName?: string };
 type UserDetail = {
   user: AdminUserRow;
@@ -40,7 +40,7 @@ type UserDetail = {
   depositRequests: DepositRequestRow[]; withdrawalRequests: WithdrawalRequestRow[];
   notifications: { id: string; title: string; message: string; createdAt: string; readAt: string | null }[];
 };
-type Overview = { totalUsers: number; totalCashBalance: string; pendingDeposits: number; pendingWithdrawals: number; activeBotSubscriptions: number; activeCopySubscriptions: number; activePlanSubscriptions: number; restrictedAccounts: number };
+type Overview = { totalUsers: number; totalCashBalance: string; totalProfitBalance: string; pendingDeposits: number; pendingWithdrawals: number; activeBotSubscriptions: number; activeCopySubscriptions: number; activePlanSubscriptions: number; restrictedAccounts: number };
 
 type Tab = "overview" | "users" | "deposits" | "withdrawals" | "accounts" | "traders" | "bots" | "plans" | "broadcast";
 const navGroups: { label: string; items: { name: Tab; label: string; icon: typeof LayoutDashboard }[] }[] = [
@@ -150,9 +150,9 @@ function AdminPageInner() {
   const [userRows, setUserRows] = useState<AdminUserRow[]>([]);
   const [usersLoading, setUsersLoading] = useState(false);
   const [userSearch, setUserSearch] = useState("");
-  const [userTotals, setUserTotals] = useState({ total: 0, totalCashBalance: "0" });
+  const [userTotals, setUserTotals] = useState({ total: 0, totalCashBalance: "0", totalProfitBalance: "0" });
   const [showCreateUser, setShowCreateUser] = useState(false);
-  const [createUserForm, setCreateUserForm] = useState({ name: "", email: "", password: "", cashBalance: "0" });
+  const [createUserForm, setCreateUserForm] = useState({ name: "", email: "", password: "", cashBalance: "0", profitBalance: "0" });
   const [createUserBusy, setCreateUserBusy] = useState(false);
   const [selectedUserId, setSelectedUserId] = useState<string | null>(null);
   const [userDetail, setUserDetail] = useState<UserDetail | null>(null);
@@ -164,6 +164,8 @@ function AdminPageInner() {
   const [statusBusy, setStatusBusy] = useState(false);
   const [balanceForm, setBalanceForm] = useState({ newBalance: "", note: "" });
   const [balanceBusy, setBalanceBusy] = useState(false);
+  const [profitForm, setProfitForm] = useState({ newProfit: "", note: "" });
+  const [profitBusy, setProfitBusy] = useState(false);
   const [notifForm, setNotifForm] = useState({ title: "", message: "" });
   const [notifBusy, setNotifBusy] = useState(false);
   const [manualTradeForm, setManualTradeForm] = useState({ symbol: "BTC", side: "buy" as "buy" | "sell", quantity: "", price: "", note: "" });
@@ -178,7 +180,7 @@ function AdminPageInner() {
       const result = await res.json();
       if (!res.ok) throw new Error(result.error || "Unable to load users");
       setUserRows(result.users ?? []);
-      setUserTotals({ total: result.total ?? 0, totalCashBalance: result.totalCashBalance ?? "0" });
+      setUserTotals({ total: result.total ?? 0, totalCashBalance: result.totalCashBalance ?? "0", totalProfitBalance: result.totalProfitBalance ?? "0" });
     } catch (error) { notify(error instanceof Error ? error.message : "Unable to load users", true); } finally { setUsersLoading(false); }
   };
   useEffect(() => { if (authState === "ok" && tab === "users" && !selectedUserId) void loadUsers(userSearch); }, [authState, tab, selectedUserId]);
@@ -198,6 +200,7 @@ function AdminPageInner() {
       setEditUserForm({ name: result.user.name, email: result.user.email, role: result.user.role });
       setStatusForm({ accountStatus: result.user.accountStatus, maxTradeAmount: result.user.maxTradeAmount ?? "", withdrawalsBlocked: result.user.withdrawalsBlocked, statusReason: result.user.statusReason ?? "" });
       setBalanceForm({ newBalance: result.user.cashBalance, note: "" });
+      setProfitForm({ newProfit: result.user.profitBalance, note: "" });
     } catch (error) { notify(error instanceof Error ? error.message : "Unable to load this user", true); setSelectedUserId(null); } finally { setUserDetailLoading(false); }
   };
   const openUser = (id: string) => { setSelectedUserId(id); void loadUserDetail(id); };
@@ -216,7 +219,7 @@ function AdminPageInner() {
       const result = await res.json();
       if (!res.ok) throw new Error(result.error || "Something went wrong");
       notify(`${result.user?.name ?? "User"} created`);
-      setCreateUserForm({ name: "", email: "", password: "", cashBalance: "0" });
+      setCreateUserForm({ name: "", email: "", password: "", cashBalance: "0", profitBalance: "0" });
       setShowCreateUser(false);
       await loadUsers(userSearch);
     } catch (error) { notify(error instanceof Error ? error.message : "Something went wrong", true); } finally { setCreateUserBusy(false); }
@@ -265,6 +268,23 @@ function AdminPageInner() {
       setBalanceForm({ newBalance: String(newBalance.toFixed(2)), note: "" });
       await loadUserDetail(selectedUserId);
     } catch (error) { notify(error instanceof Error ? error.message : "Something went wrong", true); } finally { setBalanceBusy(false); }
+  };
+
+  const saveProfit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!selectedUserId || profitBusy) return;
+    const newProfit = Number(profitForm.newProfit);
+    if (!Number.isFinite(newProfit) || newProfit < 0) return notify("Enter a valid profit amount.", true);
+    if (!(await confirm({ title: "Set this user's profits?", message: `This directly sets their profit balance to ${money(newProfit)} and logs the difference as a profit credit/debit. It's folded into their total balance.`, confirmLabel: "Set profits", danger: true }))) return;
+    setProfitBusy(true);
+    try {
+      const res = await fetch(`/api/admin/users/${selectedUserId}/profit`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ newProfit, note: profitForm.note }) });
+      const result = await res.json();
+      if (!res.ok) throw new Error(result.error || "Something went wrong");
+      notify(result.message || "Profit balance updated");
+      setProfitForm({ newProfit: String(newProfit.toFixed(2)), note: "" });
+      await loadUserDetail(selectedUserId);
+    } catch (error) { notify(error instanceof Error ? error.message : "Something went wrong", true); } finally { setProfitBusy(false); }
   };
 
   const sendNotification = async (e: React.FormEvent) => {
@@ -671,9 +691,10 @@ function AdminPageInner() {
 
         {tab === "overview" && <>
           {overviewLoading && !overview ? <div className="no-results">Loading overview…</div> : overview && <>
-            <div className="stats-grid">
+            <div className="stats-grid five">
               <div className="stat-card"><span className="stat-icon blue"><UsersRound size={19}/></span><span className="stat-label">Total users</span><strong className="stat-value">{overview.totalUsers}</strong><div className="stat-foot"><span>{overview.restrictedAccounts} restricted</span></div></div>
               <div className="stat-card"><span className="stat-icon green"><Wallet size={19}/></span><span className="stat-label">Total cash balance</span><strong className="stat-value">{money(Number(overview.totalCashBalance))}</strong><div className="stat-foot"><span>Across all accounts</span></div></div>
+              <div className="stat-card"><span className="stat-icon green"><TrendingUp size={19}/></span><span className="stat-label">Total profits</span><strong className="stat-value">{money(Number(overview.totalProfitBalance))}</strong><div className="stat-foot"><span>Across all accounts</span></div></div>
               <div className="stat-card"><span className="stat-icon orange"><ArrowDownLeft size={19}/></span><span className="stat-label">Pending deposits</span><strong className="stat-value">{overview.pendingDeposits}</strong><div className="stat-foot"><button className="text-link" onClick={() => go("deposits")} style={{ fontSize: 11 }}>Review <ArrowRight size={13}/></button></div></div>
               <div className="stat-card"><span className="stat-icon purple"><ArrowUpRight size={19}/></span><span className="stat-label">Pending withdrawals</span><strong className="stat-value">{overview.pendingWithdrawals}</strong><div className="stat-foot"><button className="text-link" onClick={() => go("withdrawals")} style={{ fontSize: 11 }}>Review <ArrowRight size={13}/></button></div></div>
             </div>
@@ -698,7 +719,7 @@ function AdminPageInner() {
           <div className="admin-filter-row" style={{ marginBottom: 16, justifyContent: "space-between" }}>
             <div className="top-search" style={{ width: 280 }}><Search size={17}/><input placeholder="Search by name or email…" value={userSearch} onChange={e => setUserSearch(e.target.value)}/></div>
             <div style={{ display: "flex", gap: 10, alignItems: "center" }}>
-              <span className="subtle-label">{userTotals.total} user{userTotals.total === 1 ? "" : "s"} · {money(Number(userTotals.totalCashBalance))} total balance</span>
+              <span className="subtle-label">{userTotals.total} user{userTotals.total === 1 ? "" : "s"} · {money(Number(userTotals.totalCashBalance))} total balance · {money(Number(userTotals.totalProfitBalance))} total profits</span>
               <button className="outline-btn small" onClick={() => loadUsers(userSearch)}><RefreshCw size={13} className={usersLoading ? "spin" : ""}/> Refresh</button>
               <button className="primary-btn small" onClick={() => setShowCreateUser(s => !s)}><UserPlus size={15}/> Add user</button>
             </div>
@@ -710,15 +731,17 @@ function AdminPageInner() {
               <div><label className="input-label">Email</label><input className="text-input" type="email" value={createUserForm.email} onChange={e => setCreateUserForm({ ...createUserForm, email: e.target.value })}/></div>
               <div><label className="input-label">Password</label><input className="text-input" type="password" placeholder="At least 8 characters" value={createUserForm.password} onChange={e => setCreateUserForm({ ...createUserForm, password: e.target.value })}/></div>
               <div><label className="input-label">Starting balance ($)</label><input className="text-input" type="number" step="0.01" min="0" value={createUserForm.cashBalance} onChange={e => setCreateUserForm({ ...createUserForm, cashBalance: e.target.value })}/></div>
+              <div><label className="input-label">Starting profits ($)</label><input className="text-input" type="number" step="0.01" min="0" value={createUserForm.profitBalance} onChange={e => setCreateUserForm({ ...createUserForm, profitBalance: e.target.value })}/></div>
               <div style={{ gridColumn: "1 / -1", display: "flex", gap: 10, marginTop: 14 }}><button className="primary-btn" disabled={createUserBusy}>{createUserBusy ? "Creating..." : "Create user"}</button><button type="button" className="outline-btn" onClick={() => setShowCreateUser(false)}>Cancel</button></div>
             </form>
           </section>}
           <section className="panel admin-panel">
-            <div className="table-scroll"><table className="data-table"><thead><tr><th>User</th><th>Role</th><th>Balance</th><th>Status</th><th>Joined</th><th></th></tr></thead><tbody>
+            <div className="table-scroll"><table className="data-table"><thead><tr><th>User</th><th>Role</th><th>Balance</th><th>Profits</th><th>Status</th><th>Joined</th><th></th></tr></thead><tbody>
               {userRows.map(u => <tr key={u.id} className="clickable-row" onClick={() => openUser(u.id)}>
                 <td><div className="coin-cell"><span className="avatar" style={{ width: 34, height: 34, fontSize: 11 }}>{u.name.split(" ").map(n => n[0]).slice(0, 2).join("")}</span><div><strong>{u.name}</strong><span>{u.email}</span></div></div></td>
                 <td className="capitalize">{u.role}{u.isDemo ? " · demo" : ""}</td>
                 <td className="table-strong">{money(Number(u.cashBalance))}</td>
+                <td className="table-strong">{money(Number(u.profitBalance))}</td>
                 <td><span className={`status-pill ${u.accountStatus}`}><span/>{accountStatusLabel(u.accountStatus as AccountStatus)}</span></td>
                 <td className="muted-cell">{new Date(u.createdAt).toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" })}</td>
                 <td><button className="outline-btn small" onClick={e => { e.stopPropagation(); openUser(u.id); }}>Manage</button></td>
@@ -779,6 +802,17 @@ function AdminPageInner() {
                     <label className="input-label">Note (optional)</label>
                     <input className="text-input" placeholder="e.g. Manual correction, bonus credit..." value={balanceForm.note} onChange={e => setBalanceForm({ ...balanceForm, note: e.target.value })} maxLength={300}/>
                     <button className="primary-btn full-btn" disabled={balanceBusy} style={{ marginTop: 14 }}><Wallet size={15}/> {balanceBusy ? "Saving..." : "Update balance"}</button>
+                  </form>
+                </section>
+
+                <section className="panel admin-panel">
+                  <SectionHeadSimple title="Edit profits" subtitle="Directly set this user's profit balance — folded into their total balance"/>
+                  <form className="admin-account-form" onSubmit={saveProfit}>
+                    <label className="input-label">New profits ($)</label>
+                    <input className="text-input" type="number" step="0.01" min="0" value={profitForm.newProfit} onChange={e => setProfitForm({ ...profitForm, newProfit: e.target.value })}/>
+                    <label className="input-label">Note (optional)</label>
+                    <input className="text-input" placeholder="e.g. Copy trading gains, bonus profit..." value={profitForm.note} onChange={e => setProfitForm({ ...profitForm, note: e.target.value })} maxLength={300}/>
+                    <button className="primary-btn full-btn" disabled={profitBusy} style={{ marginTop: 14 }}><TrendingUp size={15}/> {profitBusy ? "Saving..." : "Update profits"}</button>
                   </form>
                 </section>
 

@@ -21,7 +21,7 @@ export type NotificationType =
   | "bot_subscribed" | "bot_cancelled"
   | "copy_subscribed" | "copy_cancelled"
   | "plan_subscribed" | "plan_cancelled"
-  | "admin_credit" | "admin_debit" | "account_status_changed"
+  | "admin_credit" | "admin_debit" | "profit_credit" | "profit_debit" | "account_status_changed"
   | "admin_message" | "referral_bonus" | "price_alert_triggered";
 
 // Event types that are purely a self-initiated action the user just saw

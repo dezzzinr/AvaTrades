@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { db } from "@/db";
 import { users, holdings, trades, transactions, planSubscriptions, plans, notifications } from "@/db/schema";
-import { desc, eq, and, sql, gt, isNull } from "drizzle-orm";
+import { desc, eq, and, sql, gt, isNull, asc } from "drizzle-orm";
 import { getUser, createDemoUser, setSession, clearSession } from "@/lib/auth";
 import { getAsset, marketPrice } from "@/lib/market";
 import { getMarketSnapshot } from "@/lib/market-server";
@@ -9,6 +9,21 @@ import { blockedActionMessage, tradeLimitMessage } from "@/lib/accounts";
 import { executeSpotFill, reservedBuyCash, reservedSellQuantity, sweepForUser } from "@/lib/trading-engine";
 import { getFxRate } from "@/lib/fx-server";
 import { notifyUser } from "@/lib/notify";
+import { DEFAULT_PLAN_SUBSCRIPTION_MS } from "@/lib/subscriptions";
+
+// Every user should always have a plan - if they've never subscribed to
+// anything (brand new account, legacy account from before this feature, or
+// a freshly-minted demo user), silently enroll them in the cheapest active
+// plan (expected to be a $0 "Starter"-style free tier) so the UI never has
+// to show a "No active plan" dead end. No-ops if no active plan exists yet.
+async function ensureDefaultPlan(userId: string) {
+  const [cheapest] = await db.select().from(plans).where(eq(plans.isActive, true)).orderBy(asc(plans.priceWeekly), asc(plans.sortOrder)).limit(1);
+  if (!cheapest || Number(cheapest.priceWeekly) !== 0) return null; // no free tier configured - nothing to default to
+  const now = new Date();
+  const expiresAt = new Date(now.getTime() + DEFAULT_PLAN_SUBSCRIPTION_MS);
+  await db.insert(planSubscriptions).values({ userId, planId: cheapest.id, amount: "0.00", startedAt: now, expiresAt });
+  return { planName: cheapest.name, expiresAt, amount: "0.00" };
+}
 
 export const dynamic = "force-dynamic";
 const bad = (message: string, status = 400) => NextResponse.json({ error: message }, { status });
@@ -42,7 +57,7 @@ export async function GET(request: NextRequest) {
       db.select().from(holdings).where(eq(holdings.userId, user.id)),
       db.select().from(trades).where(eq(trades.userId, user.id)).orderBy(desc(trades.createdAt)).limit(50),
       db.select().from(transactions).where(eq(transactions.userId, user.id)).orderBy(desc(transactions.createdAt)).limit(50),
-      db.select({ planName: plans.name, expiresAt: planSubscriptions.expiresAt })
+      db.select({ planName: plans.name, expiresAt: planSubscriptions.expiresAt, amount: planSubscriptions.amount })
         .from(planSubscriptions)
         .innerJoin(plans, eq(planSubscriptions.planId, plans.id))
         .where(and(eq(planSubscriptions.userId, user.id), gt(planSubscriptions.expiresAt, new Date())))
@@ -54,6 +69,11 @@ export async function GET(request: NextRequest) {
       // below (cashBalance, trades, transactions) always stays in USD.
       getFxRate(user.currency ?? "USD"),
     ]);
+    let plan = currentPlan[0];
+    if (!plan) {
+      const defaulted = await ensureDefaultPlan(user.id);
+      if (defaulted) plan = defaulted;
+    }
     const response = NextResponse.json({
       user: {
         id: user.id,
@@ -63,6 +83,7 @@ export async function GET(request: NextRequest) {
         isDemo: user.isDemo,
         role: user.role,
         cashBalance: Number(user.cashBalance),
+        profitBalance: Number(user.profitBalance),
         accountStatus: user.accountStatus,
         maxTradeAmount: user.maxTradeAmount == null ? null : Number(user.maxTradeAmount),
         withdrawalsBlocked: user.withdrawalsBlocked,
@@ -74,8 +95,9 @@ export async function GET(request: NextRequest) {
       holdings: h,
       trades: t,
       transactions: tx,
-      plan: currentPlan[0]?.planName ?? null,
-      planExpiresAt: currentPlan[0]?.expiresAt ?? null,
+      plan: plan?.planName ?? null,
+      planExpiresAt: plan?.expiresAt ?? null,
+      planAmount: plan ? Number(plan.amount) : null,
       notifications: notifRows,
       unreadNotifications: unreadCount[0]?.count ?? 0,
       fx: { currency: user.currency ?? "USD", rate: fx.rate, status: fx.status, updatedAt: fx.updatedAt },

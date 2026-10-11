@@ -7,6 +7,13 @@ export const users = pgTable("users", {
   username: text("username").unique(), // optional second login identifier; unique when set
   passwordHash: text("password_hash"),
   cashBalance: numeric("cash_balance", { precision: 18, scale: 2 }).notNull().default("12540.50"),
+  // A separate, admin-managed "profits" balance (e.g. trading/copy-trading
+  // gains credited manually rather than earned via the paper-trading engine).
+  // Not spendable on trades/withdrawals directly - it's a display balance
+  // that's folded into the user's "Total balance" alongside cash + holdings.
+  // Edited the same way as cashBalance: admin sets it directly, the delta is
+  // logged as a profit_credit/profit_debit transaction, and the user is notified.
+  profitBalance: numeric("profit_balance", { precision: 18, scale: 2 }).notNull().default("0.00"),
   isDemo: boolean("is_demo").notNull().default(false),
   role: text("role").notNull().default("user"),
   // --- Profile: personal information (collected at registration, editable

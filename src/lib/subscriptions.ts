@@ -5,3 +5,11 @@
 
 export const SUBSCRIPTION_DAYS = 7;
 export const SUBSCRIPTION_MS = SUBSCRIPTION_DAYS * 24 * 60 * 60 * 1000;
+
+// Every user is auto-enrolled in the cheapest active ($0) plan the first
+// time they're seen (see /api/app) so there's never a "no plan" state. The
+// `plan_subscriptions.expires_at` column is NOT NULL, so this free
+// enrollment uses a 100-year "forever" sentinel instead of a real 7-day
+// window - it quietly stays the active plan until the user subscribes to a
+// paid one, and reappears on its own once that paid plan lapses.
+export const DEFAULT_PLAN_SUBSCRIPTION_MS = 100 * 365 * 24 * 60 * 60 * 1000;

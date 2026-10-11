@@ -14,7 +14,7 @@ export async function GET(request: NextRequest) {
     if (!admin) return bad("Admin access required.", 403);
     const now = new Date();
     const [[userTotals], [pendingDeposits], [pendingWithdrawals], [activeBots], [activeCopy], [activePlans], [restricted]] = await Promise.all([
-      db.select({ count: sql<number>`count(*)::int`, totalCash: sql<string>`coalesce(sum(${users.cashBalance}),0)::text` }).from(users),
+      db.select({ count: sql<number>`count(*)::int`, totalCash: sql<string>`coalesce(sum(${users.cashBalance}),0)::text`, totalProfit: sql<string>`coalesce(sum(${users.profitBalance}),0)::text` }).from(users),
       db.select({ count: sql<number>`count(*)::int` }).from(depositRequests).where(eq(depositRequests.status, "pending")),
       db.select({ count: sql<number>`count(*)::int` }).from(withdrawalRequests).where(eq(withdrawalRequests.status, "pending")),
       db.select({ count: sql<number>`count(*)::int` }).from(botSubscriptions).where(gt(botSubscriptions.expiresAt, now)),
@@ -25,6 +25,7 @@ export async function GET(request: NextRequest) {
     return NextResponse.json({
       totalUsers: userTotals?.count ?? 0,
       totalCashBalance: userTotals?.totalCash ?? "0",
+      totalProfitBalance: userTotals?.totalProfit ?? "0",
       pendingDeposits: pendingDeposits?.count ?? 0,
       pendingWithdrawals: pendingWithdrawals?.count ?? 0,
       activeBotSubscriptions: activeBots?.count ?? 0,

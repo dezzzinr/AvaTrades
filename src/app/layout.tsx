@@ -2,6 +2,7 @@ import type { Metadata } from "next";
 import type { ReactNode } from "react";
 import "./globals.css";
 import "./market.css";
+import SmartsuppWidget from "@/components/smartsupp-widget";
 
 export const metadata: Metadata = {
   title: "NexaTrade — Crypto Paper Trading",
@@ -9,5 +10,5 @@ export const metadata: Metadata = {
 };
 
 export default function RootLayout({ children }: { children: ReactNode }) {
-  return <html lang="en"><body>{children}</body></html>;
+  return <html lang="en"><body>{children}<SmartsuppWidget/></body></html>;
 }
