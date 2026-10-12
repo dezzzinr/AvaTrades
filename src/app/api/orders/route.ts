@@ -6,7 +6,7 @@ import { getUser } from "@/lib/auth";
 import { getAsset, marketPrice } from "@/lib/market";
 import { getMarketSnapshot } from "@/lib/market-server";
 import { blockedActionMessage, tradeLimitMessage } from "@/lib/accounts";
-import { PENDING_ORDER_TYPES, allowedOrderTypesForSide, orderTypeLabel, spotOrderShouldFill, spotOrderFillPrice, type PendingOrderType } from "@/lib/trading";
+import { PENDING_ORDER_TYPES, allowedOrderTypesForSide, orderTypeLabel, spotOrderShouldFill, spotOrderFillPrice, normalizeDurationMinutes, formatDurationMinutes, MAX_DURATION_MINUTES, type PendingOrderType } from "@/lib/trading";
 import { evaluateOneOrder, reservedBuyCash, reservedSellQuantity } from "@/lib/trading-engine";
 import { notifyUser } from "@/lib/notify";
 
@@ -41,6 +41,13 @@ export async function POST(request: NextRequest) {
     const type = body.type as PendingOrderType;
     const quantity = Number(body.quantity);
     const triggerPrice = Number(body.triggerPrice);
+    // Custom timer: a raw number of minutes (any value), not a fixed
+    // preset - null/0/absent means "no expiry".
+    if (body.durationMinutes !== undefined && body.durationMinutes !== null && body.durationMinutes !== "" && normalizeDurationMinutes(body.durationMinutes) === null) {
+      return bad(`Enter a valid duration (at least 1 minute, up to ${Math.round(MAX_DURATION_MINUTES / 1440)} days).`);
+    }
+    const durationMinutes = normalizeDurationMinutes(body.durationMinutes);
+    const expiresAt = durationMinutes ? new Date(Date.now() + durationMinutes * 60_000) : null;
 
     if (!getAsset(symbol)) return bad("Choose a valid asset.");
     if (!["buy", "sell"].includes(side)) return bad("Choose buy or sell.");
@@ -86,6 +93,7 @@ export async function POST(request: NextRequest) {
         quantity: quantity.toFixed(8),
         triggerPrice: triggerPrice.toFixed(8),
         status: "open",
+        expiresAt,
       }).returning({ id: orders.id });
       return row.id;
     });
@@ -104,11 +112,12 @@ export async function POST(request: NextRequest) {
     // when it fills - only notify here for the order staying open, so the
     // user gets exactly one notification either way, not two.
     if (!filled) {
+      const expiryNote = expiresAt ? ` It will automatically cancel if it hasn't filled within ${formatDurationMinutes(durationMinutes!)}.` : "";
       await notifyUser({
         userId: user.id,
         type: "order_placed",
         title: `${orderTypeLabel(type)} order placed`,
-        message: `Your ${orderTypeLabel(type).toLowerCase()} order to ${side} ${quantity} ${symbol} at ${marketPrice(triggerPrice)} is open and will fill automatically when the market reaches that price.`,
+        message: `Your ${orderTypeLabel(type).toLowerCase()} order to ${side} ${quantity} ${symbol} at ${marketPrice(triggerPrice)} is open and will fill automatically when the market reaches that price.${expiryNote}`,
       });
     }
 
@@ -117,7 +126,7 @@ export async function POST(request: NextRequest) {
       filled,
       message: filled
         ? `${side === "buy" ? "Bought" : "Sold"} ${quantity} ${symbol} at ${marketPrice(fillPrice)} (filled immediately).`
-        : `${orderTypeLabel(type)} order placed: ${side} ${quantity} ${symbol} at ${marketPrice(triggerPrice)}.`,
+        : `${orderTypeLabel(type)} order placed: ${side} ${quantity} ${symbol} at ${marketPrice(triggerPrice)}${expiresAt ? ` (expires in ${formatDurationMinutes(durationMinutes!)})` : ""}.`,
     });
   } catch (error) {
     console.error("Orders POST:", error);

@@ -17,7 +17,7 @@
 import { and, eq, inArray, sql } from "drizzle-orm";
 import { db } from "@/db";
 import { holdings, orders, positions, priceAlerts, trades, transactions, users } from "@/db/schema";
-import { spotOrderShouldFill, spotOrderFillPrice, positionCloseEvent, realizedPnl, type PendingOrderType } from "@/lib/trading";
+import { spotOrderShouldFill, spotOrderFillPrice, positionCloseEvent, realizedPnl, orderTypeLabel, type PendingOrderType } from "@/lib/trading";
 import { marketPrice } from "@/lib/market";
 import { notifyUser } from "@/lib/notify";
 
@@ -124,6 +124,28 @@ export async function evaluateOneOrder(orderId: string, currentPrice: number): P
   return true;
 }
 
+// Auto-cancels a pending order whose user-chosen "good-til-time" duration
+// has elapsed before it filled. Checked ahead of the price-trigger fill
+// condition in the sweeps below, so once an order's time is up it stops
+// being fillable even if the price would otherwise match it right now.
+export async function expireOneOrder(orderId: string): Promise<boolean> {
+  const expired = await db.transaction(async (tx) => {
+    const [order] = await tx.select().from(orders).where(eq(orders.id, orderId)).for("update");
+    if (!order || order.status !== "open") return null;
+    if (!order.expiresAt || order.expiresAt.getTime() > Date.now()) return null;
+    await tx.update(orders).set({ status: "expired", cancelledAt: new Date() }).where(eq(orders.id, order.id));
+    return { userId: order.userId, symbol: order.symbol, side: order.side as "buy" | "sell", type: order.type as PendingOrderType, quantity: order.quantity, triggerPrice: order.triggerPrice };
+  });
+  if (!expired) return false;
+  await notifyUser({
+    userId: expired.userId,
+    type: "order_cancelled",
+    title: `${orderTypeLabel(expired.type)} order expired`,
+    message: `Your ${orderTypeLabel(expired.type).toLowerCase()} order to ${expired.side} ${Number(expired.quantity)} ${expired.symbol} at ${marketPrice(Number(expired.triggerPrice))} reached its set duration before filling and was automatically cancelled.`,
+  });
+  return true;
+}
+
 export async function evaluateOnePosition(positionId: string, currentPrice: number): Promise<boolean> {
   const result = await db.transaction(async (tx) => {
     const [position] = await tx.select().from(positions).where(eq(positions.id, positionId)).for("update");
@@ -174,6 +196,44 @@ function closePnl(position: typeof positions.$inferSelect, closePrice: number): 
   return position.side === "long" ? (closePrice - entry) * qty : (entry - closePrice) * qty;
 }
 
+// Auto-closes a position whose user-chosen duration has elapsed, at the
+// current market price - exactly like a manual close, just triggered by
+// time instead of a button click. Only called once a sweep has already
+// confirmed no take-profit/stop-loss/liquidation price event fired first
+// (those take priority since they're real risk events, not a timer).
+export async function expireOnePosition(positionId: string, currentPrice: number): Promise<boolean> {
+  const result = await db.transaction(async (tx) => {
+    const [position] = await tx.select().from(positions).where(eq(positions.id, positionId)).for("update");
+    if (!position || position.status !== "open") return null;
+    if (!position.expiresAt || position.expiresAt.getTime() > Date.now()) return null;
+    const pnl = realizedPnl(Number(position.margin), closePnl(position, currentPrice));
+    const credit = Math.round((Number(position.margin) + pnl) * 100) / 100;
+    await tx.update(users).set({ cashBalance: sql`${users.cashBalance} + ${credit}` }).where(eq(users.id, position.userId));
+    await tx.update(positions).set({
+      status: "closed",
+      closePrice: currentPrice.toFixed(8),
+      closeReason: "duration_expired",
+      realizedPnl: pnl.toFixed(2),
+      closedAt: new Date(),
+    }).where(eq(positions.id, position.id));
+    await tx.insert(transactions).values({
+      userId: position.userId,
+      type: "position_closed",
+      amount: pnl.toFixed(2),
+      description: `Duration ended — closed ${Number(position.leverage)}x ${position.side} ${position.symbol} position at $${currentPrice}`,
+    });
+    return { userId: position.userId, symbol: position.symbol, side: position.side, leverage: Number(position.leverage), pnl };
+  });
+  if (!result) return false;
+  await notifyUser({
+    userId: result.userId,
+    type: "position_auto_closed",
+    title: `Duration ended: ${result.symbol} position`,
+    message: `Your ${result.leverage}x ${result.side} ${result.symbol} position reached its set duration and was automatically closed at ${marketPrice(currentPrice)} (${result.pnl >= 0 ? "+" : ""}$${result.pnl.toFixed(2)} P&L).`,
+  });
+  return true;
+}
+
 // --- Sweeps: evaluate every open order/position (optionally scoped to one
 // user) against a map of live prices. ---------------------------------------
 
@@ -183,9 +243,15 @@ export async function sweepOrders(prices: Record<string, number>, userId?: strin
   const where = userId
     ? and(eq(orders.status, "open"), eq(orders.userId, userId), inArray(orders.symbol, symbols))
     : and(eq(orders.status, "open"), inArray(orders.symbol, symbols));
-  const open = await db.select({ id: orders.id, symbol: orders.symbol, type: orders.type, side: orders.side, triggerPrice: orders.triggerPrice }).from(orders).where(where);
+  const open = await db.select({ id: orders.id, symbol: orders.symbol, type: orders.type, side: orders.side, triggerPrice: orders.triggerPrice, expiresAt: orders.expiresAt }).from(orders).where(where);
   let filled = 0;
   for (const order of open) {
+    // A "good-til-time" order stops being fillable once its duration is
+    // up, even if the price would otherwise match it this instant.
+    if (order.expiresAt && order.expiresAt.getTime() <= Date.now()) {
+      if (await expireOneOrder(order.id)) filled++;
+      continue;
+    }
     const price = prices[order.symbol];
     if (price == null || price <= 0) continue;
     if (!spotOrderShouldFill(order.type as PendingOrderType, order.side as "buy" | "sell", Number(order.triggerPrice), price)) continue;
@@ -203,6 +269,7 @@ export async function sweepPositions(prices: Record<string, number>, userId?: st
   const open = await db.select({
     id: positions.id, symbol: positions.symbol, side: positions.side,
     liquidationPrice: positions.liquidationPrice, takeProfitPrice: positions.takeProfitPrice, stopLossPrice: positions.stopLossPrice,
+    expiresAt: positions.expiresAt,
   }).from(positions).where(where);
   let closed = 0;
   for (const position of open) {
@@ -215,8 +282,15 @@ export async function sweepPositions(prices: Record<string, number>, userId?: st
       position.stopLossPrice == null ? null : Number(position.stopLossPrice),
       price,
     );
-    if (!event) continue;
-    if (await evaluateOnePosition(position.id, price)) closed++;
+    if (event) {
+      if (await evaluateOnePosition(position.id, price)) closed++;
+      continue;
+    }
+    // No price-trigger event fired - fall back to checking whether the
+    // user's chosen duration has elapsed.
+    if (position.expiresAt && position.expiresAt.getTime() <= Date.now()) {
+      if (await expireOnePosition(position.id, price)) closed++;
+    }
   }
   return closed;
 }

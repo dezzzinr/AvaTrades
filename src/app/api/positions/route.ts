@@ -6,7 +6,7 @@ import { getUser } from "@/lib/auth";
 import { getAsset, marketPrice } from "@/lib/market";
 import { getMarketSnapshot } from "@/lib/market-server";
 import { blockedActionMessage, tradeLimitMessage } from "@/lib/accounts";
-import { LEVERAGE_OPTIONS, MAX_MARGIN, MIN_MARGIN, POSITION_SIDES, liquidationPrice, positionPnl, validatePositionTarget, type PositionSide } from "@/lib/trading";
+import { LEVERAGE_OPTIONS, MAX_MARGIN, MIN_MARGIN, POSITION_SIDES, liquidationPrice, positionPnl, validatePositionTarget, normalizeDurationMinutes, formatDurationMinutes, MAX_DURATION_MINUTES, type PositionSide } from "@/lib/trading";
 import { notifyUser } from "@/lib/notify";
 
 export const dynamic = "force-dynamic";
@@ -50,6 +50,13 @@ export async function POST(request: NextRequest) {
     const margin = Number(body.margin);
     const takeProfitInput = body.takeProfitPrice === undefined || body.takeProfitPrice === null || body.takeProfitPrice === "" ? null : Number(body.takeProfitPrice);
     const stopLossInput = body.stopLossPrice === undefined || body.stopLossPrice === null || body.stopLossPrice === "" ? null : Number(body.stopLossPrice);
+    // Custom timer: a raw number of minutes (any value), not a fixed
+    // preset - null/0/absent means "no expiry".
+    if (body.durationMinutes !== undefined && body.durationMinutes !== null && body.durationMinutes !== "" && normalizeDurationMinutes(body.durationMinutes) === null) {
+      return bad(`Enter a valid duration (at least 1 minute, up to ${Math.round(MAX_DURATION_MINUTES / 1440)} days).`);
+    }
+    const durationMinutes = normalizeDurationMinutes(body.durationMinutes);
+    const expiresAt = durationMinutes ? new Date(Date.now() + durationMinutes * 60_000) : null;
 
     if (!getAsset(symbol)) return bad("Choose a valid asset.");
     if (!POSITION_SIDES.includes(side)) return bad("Choose long or short.");
@@ -95,6 +102,7 @@ export async function POST(request: NextRequest) {
         takeProfitPrice: takeProfitInput !== null ? takeProfitInput.toFixed(8) : null,
         stopLossPrice: stopLossInput !== null ? stopLossInput.toFixed(8) : null,
         status: "open",
+        expiresAt,
       }).returning({ id: positions.id });
       await tx.insert(transactions).values({
         userId: user.id,
@@ -105,16 +113,17 @@ export async function POST(request: NextRequest) {
       return row.id;
     });
 
+    const expiryNote = expiresAt ? ` It will automatically close at the market price after ${formatDurationMinutes(durationMinutes!)} if still open.` : "";
     await notifyUser({
       userId: user.id,
       type: "position_opened",
       title: `Opened ${leverage}x ${side} ${symbol} position`,
-      message: `Opened a ${leverage}x ${side} ${symbol} position at ${marketPrice(entryPrice)} with $${margin.toFixed(2)} margin. Liquidation at ${marketPrice(liqPrice)}.`,
+      message: `Opened a ${leverage}x ${side} ${symbol} position at ${marketPrice(entryPrice)} with $${margin.toFixed(2)} margin. Liquidation at ${marketPrice(liqPrice)}.${expiryNote}`,
     });
 
     return NextResponse.json({
       success: true,
-      message: `Opened ${leverage}x ${side} ${symbol} position at ${marketPrice(entryPrice)}. Liquidation at ${marketPrice(liqPrice)}.`,
+      message: `Opened ${leverage}x ${side} ${symbol} position at ${marketPrice(entryPrice)}. Liquidation at ${marketPrice(liqPrice)}.${expiresAt ? ` Closes automatically in ${formatDurationMinutes(durationMinutes!)}.` : ""}`,
       positionId,
     });
   } catch (error) {

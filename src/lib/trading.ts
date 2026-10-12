@@ -22,9 +22,79 @@ export type OrderSide = (typeof ORDER_SIDES)[number];
 export const POSITION_SIDES = ["long", "short"] as const;
 export type PositionSide = (typeof POSITION_SIDES)[number];
 
-export const LEVERAGE_OPTIONS = [2, 3, 5, 10, 20, 50, 100] as const;
+export const LEVERAGE_OPTIONS = [1, 2, 3, 5, 10, 20, 50, 100] as const;
 export const MIN_MARGIN = 10;
 export const MAX_MARGIN = 1_000_000;
+
+// How long a trade should last, chosen by the user when placing it:
+// - Margin positions (including a plain 1x "trade" with no leverage
+//   amplification) auto-close at the live market price once this much time
+//   has passed, exactly like an unattended take-profit/stop-loss/
+//   liquidation close (realizes whatever P&L exists at that moment).
+// - Pending spot orders (limit/stop-loss/take-profit): a "good-til-time"
+//   order - if it hasn't filled by this time, it's automatically cancelled
+//   instead of sitting open forever.
+// - A spot "market" order can also carry a duration: it still fills
+//   instantly, but instead of landing in holdings forever it's opened as a
+//   1x position that auto-closes (sells back / buys back) once the
+//   duration elapses.
+// "No expiry" (the default, preserving pre-existing behavior) means the
+// trade stays open/pending indefinitely until manually closed/cancelled or
+// a price target is hit.
+//
+// Duration is a free-form custom timer (any whole number of minutes),
+// not a fixed preset list - the options below are just convenience
+// quick-picks shown in the UI to prefill the custom timer.
+export const MIN_DURATION_MINUTES = 1;
+export const MAX_DURATION_MINUTES = 60 * 24 * 90; // 90 days - a sane upper bound
+export const DURATION_UNITS = [
+  { id: "minutes", label: "Minutes", minutes: 1 },
+  { id: "hours", label: "Hours", minutes: 60 },
+  { id: "days", label: "Days", minutes: 60 * 24 },
+] as const satisfies readonly { id: string; label: string; minutes: number }[];
+export type DurationUnitId = (typeof DURATION_UNITS)[number]["id"];
+export function minutesPerUnit(unit: string): number {
+  return DURATION_UNITS.find((u) => u.id === unit)?.minutes ?? 1;
+}
+
+// Quick-pick presets for the custom timer (clicking one just fills the
+// amount/unit inputs - the timer itself accepts any custom value).
+export const DURATION_PRESETS = [
+  { label: "1 minute", minutes: 1 },
+  { label: "15 minutes", minutes: 15 },
+  { label: "1 hour", minutes: 60 },
+  { label: "4 hours", minutes: 60 * 4 },
+  { label: "1 day", minutes: 60 * 24 },
+  { label: "1 week", minutes: 60 * 24 * 7 },
+] as const;
+
+// Validates/clamps a user-entered duration. Returns null for "no expiry",
+// otherwise a whole number of minutes within [MIN_DURATION_MINUTES,
+// MAX_DURATION_MINUTES], or throws-worthy `null` if the input is garbage
+// (callers should treat a non-null, non-finite input as a validation
+// error, not silently fall back to "no expiry").
+export function normalizeDurationMinutes(minutes: unknown): number | null {
+  if (minutes === null || minutes === undefined || minutes === "") return null;
+  const n = Math.round(Number(minutes));
+  if (!Number.isFinite(n) || n <= 0) return null;
+  return Math.min(MAX_DURATION_MINUTES, Math.max(MIN_DURATION_MINUTES, n));
+}
+
+// Pretty-prints an arbitrary custom duration (not just the presets) for
+// notification copy and UI labels, e.g. 1 -> "1 minute", 90 -> "1h 30m",
+// 4320 -> "3 days".
+export function formatDurationMinutes(totalMinutes: number): string {
+  const mins = Math.max(0, Math.round(totalMinutes));
+  if (mins < 60) return `${mins} minute${mins === 1 ? "" : "s"}`;
+  if (mins < 60 * 24) {
+    const h = Math.floor(mins / 60);
+    const m = mins % 60;
+    return m === 0 ? `${h} hour${h === 1 ? "" : "s"}` : `${h}h ${m}m`;
+  }
+  const d = Math.floor(mins / (60 * 24));
+  const h = Math.floor((mins % (60 * 24)) / 60);
+  return h === 0 ? `${d} day${d === 1 ? "" : "s"}` : `${d}d ${h}h`;
+}
 
 export function orderTypeLabel(type: string): string {
   switch (type) {
@@ -109,6 +179,17 @@ export function spotOrderShouldFill(type: PendingOrderType, side: OrderSide, tri
 export function spotOrderFillPrice(type: PendingOrderType, side: OrderSide, triggerPrice: number, currentPrice: number): number {
   if (type === "limit") return side === "buy" ? Math.min(triggerPrice, currentPrice) : Math.max(triggerPrice, currentPrice);
   return triggerPrice;
+}
+
+export function closeReasonLabel(reason: string | null | undefined): string {
+  switch (reason) {
+    case "manual": return "Manually closed";
+    case "take_profit": return "Take-profit hit";
+    case "stop_loss": return "Stop-loss hit";
+    case "liquidation": return "Liquidated";
+    case "duration_expired": return "Duration ended";
+    default: return "—";
+  }
 }
 
 export type PositionCloseEvent = { reason: "liquidation" | "take_profit" | "stop_loss"; price: number };

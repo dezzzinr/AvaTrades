@@ -65,6 +65,13 @@
 .leverage-row{display:flex;gap:6px;flex-wrap:wrap;margin-bottom:4px}
 .leverage-row button{flex:1;min-width:46px;height:36px;border:1px solid var(--line);background:var(--surface);border-radius:8px;color:var(--muted);font-size:12px;font-weight:720}
 .leverage-row button.active{border-color:var(--blue);background:var(--tint-blue-bg);color:var(--blue)}
+.duration-custom-row{display:flex;gap:8px;margin-top:4px}
+.duration-custom-row .duration-amount-input{height:40px;border:1px solid var(--line);border-radius:8px;padding:0 11px;background:var(--surface);color:var(--ink);font-size:12px;font-weight:700;width:90px;flex-shrink:0}
+.duration-custom-row .duration-amount-input:focus{outline:0;border-color:#9a9aff;box-shadow:0 0 0 3px #1a1aff0c}
+.duration-custom-row .duration-unit-select{flex:1}
+.duration-presets-row{display:flex;gap:6px;flex-wrap:wrap;margin-top:9px}
+.duration-preset-chip{height:28px;padding:0 10px;border:1px solid var(--line);background:var(--surface);border-radius:14px;color:var(--muted);font-size:10px;font-weight:700}
+.duration-preset-chip:hover{border-color:var(--blue);color:var(--blue);background:var(--tint-blue-bg)}
 .position-pnl.positive-text,.position-pnl.negative-text{font-weight:760}
 .liquidation-cell{color:var(--tint-red-fg);font-weight:700}
 .status-pill.open{background:var(--tint-blue-bg);color:var(--blue2)}

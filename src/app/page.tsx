@@ -6,7 +6,7 @@ import { assets as catalogAssets, getAsset as getCatalogAsset, type Asset, type 
 import { formatMoney, formatMarketPrice, formatCompactMoney } from "@/lib/currency";
 import { DEPOSIT_METHODS, MAX_RECEIPT_BYTES, type DepositMethod } from "@/lib/deposits";
 import { WITHDRAWAL_METHODS, type WithdrawalMethod } from "@/lib/withdrawals";
-import { ORDER_TYPES, LEVERAGE_OPTIONS, MIN_MARGIN, allowedOrderTypesForSide, liquidationPrice, orderTypeLabel, positionPnl, type OrderType, type PositionSide } from "@/lib/trading";
+import { ORDER_TYPES, LEVERAGE_OPTIONS, MIN_MARGIN, DURATION_PRESETS, DURATION_UNITS, MIN_DURATION_MINUTES, minutesPerUnit, formatDurationMinutes, allowedOrderTypesForSide, liquidationPrice, orderTypeLabel, positionPnl, closeReasonLabel, type OrderType, type PositionSide, type DurationUnitId } from "@/lib/trading";
 import MarketChart from "@/components/market-chart";
 import CandlestickChart from "@/components/candlestick-chart";
 import RegisterModal from "@/components/register-modal";
@@ -36,8 +36,8 @@ type BotSubscription = { id: string; botProductId: string; botName: string; amou
 type BotInstance = { id: string; botProductId: string; botName: string; strategy: string; name: string; symbol: string; amount: string; active: boolean; createdAt: string; subscriptionActive: boolean };
 type Plan = { id: string; name: string; description: string; priceWeekly: string; features: string[]; isFeatured: boolean; activeSubscribers: number; mySubscription: { expiresAt: string; amount: string; isCurrent: boolean } | null };
 type PlanSubscription = { id: string; planId: string; planName: string; amount: string; startedAt: string; expiresAt: string };
-type Order = { id: string; symbol: string; side: "buy" | "sell"; type: OrderType; quantity: string; triggerPrice: string; status: string; filledPrice: string | null; filledAt: string | null; cancelledAt: string | null; createdAt: string };
-type Position = { id: string; symbol: string; side: PositionSide; leverage: string; margin: string; quantity: string; entryPrice: string; liquidationPrice: string; takeProfitPrice: string | null; stopLossPrice: string | null; status: string; closePrice: string | null; closeReason: string | null; realizedPnl: string | null; createdAt: string; closedAt: string | null; currentPrice?: number; unrealizedPnl?: number };
+type Order = { id: string; symbol: string; side: "buy" | "sell"; type: OrderType; quantity: string; triggerPrice: string; status: string; filledPrice: string | null; filledAt: string | null; cancelledAt: string | null; expiresAt: string | null; createdAt: string };
+type Position = { id: string; symbol: string; side: PositionSide; leverage: string; margin: string; quantity: string; entryPrice: string; liquidationPrice: string; takeProfitPrice: string | null; stopLossPrice: string | null; status: string; closePrice: string | null; closeReason: string | null; realizedPnl: string | null; expiresAt: string | null; createdAt: string; closedAt: string | null; currentPrice?: number; unrealizedPnl?: number };
 const preview: AppData = {
   user: { id: "preview", name: "Alex Morgan", email: null, username: null, isDemo: true, role: "user", emailVerified: true, cashBalance: 12540.50, profitBalance: 0, targetBalance: 0, accountStatus: "active", maxTradeAmount: null, withdrawalsBlocked: false, statusReason: null, profilePhoto: null, currency: "USD" },
   holdings: [{ id: "a", symbol: "BTC", quantity: "0.28450000", avgPrice: "61240.00" }, { id: "b", symbol: "ETH", quantity: "3.25000000", avgPrice: "3180.00" }, { id: "c", symbol: "SOL", quantity: "42.00000000", avgPrice: "148.50" }, { id: "d", symbol: "AVAX", quantity: "80.00000000", avgPrice: "34.20" }],
@@ -274,6 +274,9 @@ function HomePageInner() {
   const [tradeMode, setTradeMode] = useState<"Spot" | "Margin">("Spot");
   const [orderType, setOrderType] = useState<OrderType>("market");
   const [orderPrice, setOrderPrice] = useState("");
+  const [orderDurationOn, setOrderDurationOn] = useState(false);
+  const [orderDurationAmount, setOrderDurationAmount] = useState("15");
+  const [orderDurationUnit, setOrderDurationUnit] = useState<DurationUnitId>("minutes");
   const [myOrders, setMyOrders] = useState<{ open: Order[]; history: Order[] }>({ open: [], history: [] });
   const [ordersLoaded, setOrdersLoaded] = useState(false);
   const [cancellingOrderId, setCancellingOrderId] = useState("");
@@ -282,6 +285,9 @@ function HomePageInner() {
   const [marginAmount, setMarginAmount] = useState("");
   const [positionTP, setPositionTP] = useState("");
   const [positionSL, setPositionSL] = useState("");
+  const [positionDurationOn, setPositionDurationOn] = useState(false);
+  const [positionDurationAmount, setPositionDurationAmount] = useState("1");
+  const [positionDurationUnit, setPositionDurationUnit] = useState<DurationUnitId>("hours");
   const [myPositions, setMyPositions] = useState<{ open: Position[]; history: Position[] }>({ open: [], history: [] });
   const [positionsLoaded, setPositionsLoaded] = useState(false);
   const [openingPosition, setOpeningPosition] = useState(false);
@@ -441,10 +447,29 @@ function HomePageInner() {
   const placeSpotOrder = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!requireRealAccount()) return;
+    const orderDurationMinutes = computeDurationMinutes(orderDurationOn, orderDurationAmount, orderDurationUnit);
     if (orderType === "market") {
-      if (!quoteLive || currentAsset.price <= 0) return notify("Live quotes are unavailable. Paper trading is paused.", true);
+      if (!quoteLive || currentAsset.price <= 0) return notify("Live quotes are unavailable. Live trading is paused.", true);
       const usd = Number(tradeAmount);
       if (!usd || usd <= 0) return notify("Enter a valid USD amount", true);
+      // A market order with a duration set doesn't land in holdings - it
+      // opens as a 1x (no leverage amplification) position instead, which
+      // automatically closes and realizes P&L once the timer is up, just
+      // like a leveraged position's duration expiry.
+      if (orderDurationMinutes) {
+        if (loading) return;
+        if (!(await confirm({ title: `${side === "buy" ? "Buy" : "Sell"} ${symbol} for ${formatDurationMinutes(orderDurationMinutes)}?`, message: `This opens a timed ${side === "buy" ? "long" : "short"} trade on ${symbol} with ${money(usd)} at the live market price. It automatically closes and realizes your profit/loss after ${formatDurationMinutes(orderDurationMinutes)}, unless you close it sooner.`, confirmLabel: side === "buy" ? "Buy now" : "Sell now" }))) return;
+        setLoading(true);
+        try {
+          const res = await fetch("/api/positions", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ symbol, side: side === "buy" ? "long" : "short", leverage: 1, margin: usd, durationMinutes: orderDurationMinutes }) });
+          const result = await res.json();
+          if (!res.ok) throw new Error(result.error || "Something went wrong");
+          notify(result.message || "Trade opened");
+          setTradeAmount("");
+          await Promise.all([loadMyPositions(), refresh()]);
+        } catch (error) { notify(error instanceof Error ? error.message : "Something went wrong", true); } finally { setLoading(false); }
+        return;
+      }
       const quantity = Math.floor((usd / currentAsset.price) * 1e8) / 1e8;
       if (!quantity) return notify("Amount is too small for this asset", true);
       if (!(await confirm({ title: `${side === "buy" ? "Buy" : "Sell"} ${symbol}?`, message: `This will ${side} ${quantity} ${symbol} (~${money(usd)}) at the live market price.`, confirmLabel: side === "buy" ? "Buy now" : "Sell now" }))) return;
@@ -452,7 +477,7 @@ function HomePageInner() {
       if (ok) { setTradeAmount(""); void refreshMarket(); void loadMyOrders(); }
       return;
     }
-    if (!quoteLive) return notify("Live quotes are unavailable. Paper trading is paused.", true);
+    if (!quoteLive) return notify("Live quotes are unavailable. Live trading is paused.", true);
     const price = Number(orderPrice);
     if (!price || price <= 0) return notify("Enter a valid price.", true);
     const usd = Number(tradeAmount);
@@ -463,7 +488,7 @@ function HomePageInner() {
     if (!(await confirm({ title: `Place ${orderTypeLabel(orderType)} order?`, message: `${side === "buy" ? "Buy" : "Sell"} ${quantity} ${symbol} (~${money(usd)}) when the price reaches $${price.toLocaleString()}. You can cancel it anytime before it fills.`, confirmLabel: "Place order" }))) return;
     setLoading(true);
     try {
-      const res = await fetch("/api/orders", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ symbol, side, type: orderType, quantity, triggerPrice: price }) });
+      const res = await fetch("/api/orders", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ symbol, side, type: orderType, quantity, triggerPrice: price, durationMinutes: orderDurationMinutes }) });
       const result = await res.json();
       if (!res.ok) throw new Error(result.error || "Something went wrong");
       notify(result.message || "Order placed");
@@ -486,14 +511,14 @@ function HomePageInner() {
   const openPosition = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!requireRealAccount()) return;
-    if (!quoteLive) return notify("Live quotes are unavailable. Paper trading is paused.", true);
+    if (!quoteLive) return notify("Live quotes are unavailable. Live trading is paused.", true);
     const margin = Number(marginAmount);
     if (!margin || margin < MIN_MARGIN) return notify(`Enter a margin amount of at least $${MIN_MARGIN}.`, true);
     if (openingPosition) return;
     if (!(await confirm({ title: `Open ${leverageX}x ${positionSide} position?`, message: `Posting ${money(margin)} margin on ${symbol} at ${leverageX}x leverage. You can lose up to your full margin if the price moves against you, including automatic liquidation.`, confirmLabel: "Open position", danger: leverageX >= 20 }))) return;
     setOpeningPosition(true);
     try {
-      const res = await fetch("/api/positions", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ symbol, side: positionSide, leverage: leverageX, margin, takeProfitPrice: positionTP || null, stopLossPrice: positionSL || null }) });
+      const res = await fetch("/api/positions", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ symbol, side: positionSide, leverage: leverageX, margin, takeProfitPrice: positionTP || null, stopLossPrice: positionSL || null, durationMinutes: computeDurationMinutes(positionDurationOn, positionDurationAmount, positionDurationUnit) }) });
       const result = await res.json();
       if (!res.ok) throw new Error(result.error || "Something went wrong");
       notify(result.message || "Position opened");
@@ -501,7 +526,7 @@ function HomePageInner() {
       await Promise.all([loadMyPositions(), refresh()]);
     } catch (error) { notify(error instanceof Error ? error.message : "Something went wrong", true); } finally { setOpeningPosition(false); }
   };
-  const quickTrade = async (e: React.FormEvent) => { e.preventDefault(); if (!requireRealAccount()) return; if (!quoteLive || currentAsset.price <= 0) return notify("Live quotes are unavailable. Paper trading is paused.", true); const usd = Number(tradeAmount); if (!usd || usd <= 0) return notify("Enter a valid USD amount", true); const quantity = Math.floor((usd / currentAsset.price) * 1e8) / 1e8; if (!quantity) return notify("Amount is too small for this asset", true); if (!(await confirm({ title: `${side === "buy" ? "Buy" : "Sell"} ${symbol}?`, message: `This will ${side} ${quantity} ${symbol} (~${money(usd)}) at the live market price.`, confirmLabel: side === "buy" ? "Buy now" : "Sell now" }))) return; const ok = await action({ action: "trade", symbol, side, quantity }); if (ok) { setTradeAmount(""); void refreshMarket(); } };
+  const quickTrade = async (e: React.FormEvent) => { e.preventDefault(); if (!requireRealAccount()) return; if (!quoteLive || currentAsset.price <= 0) return notify("Live quotes are unavailable. Live trading is paused.", true); const usd = Number(tradeAmount); if (!usd || usd <= 0) return notify("Enter a valid USD amount", true); const quantity = Math.floor((usd / currentAsset.price) * 1e8) / 1e8; if (!quantity) return notify("Amount is too small for this asset", true); if (!(await confirm({ title: `${side === "buy" ? "Buy" : "Sell"} ${symbol}?`, message: `This will ${side} ${quantity} ${symbol} (~${money(usd)}) at the live market price.`, confirmLabel: side === "buy" ? "Buy now" : "Sell now" }))) return; const ok = await action({ action: "trade", symbol, side, quantity }); if (ok) { setTradeAmount(""); void refreshMarket(); } };
   const closePosition = async (id: string) => {
     if (closingPositionId) return;
     if (!(await confirm({ title: "Close this position?", message: "This realizes its current profit or loss immediately and returns remaining margin to your cash balance." }))) return;
@@ -612,6 +637,26 @@ function HomePageInner() {
     } catch (error) { notify(error instanceof Error ? error.message : "Something went wrong", true); } finally { setSubscribingId(""); }
   };
   const daysLeft = (expiresAt: string) => Math.max(0, Math.ceil((new Date(expiresAt).getTime() - Date.now()) / 86400000));
+  // Finer-grained "time remaining" for order/position durations, which can
+  // be as short as 15 minutes - daysLeft() above would round everything
+  // under a day down to "0 days left".
+  const timeLeftLabel = (expiresAt: string | null | undefined) => {
+    if (!expiresAt) return "No expiry";
+    const ms = new Date(expiresAt).getTime() - Date.now();
+    if (ms <= 0) return "Expiring...";
+    const mins = Math.ceil(ms / 60000);
+    if (mins < 60) return `${mins}m left`;
+    const hours = Math.floor(mins / 60);
+    if (hours < 24) return `${hours}h ${mins % 60}m left`;
+    const days = Math.floor(hours / 24);
+    return `${days}d ${hours % 24}h left`;
+  };
+  // Turns the custom-timer form state (on/off + amount + unit) into a raw
+  // minute count to send to the server, or null for "no expiry". Clamps to
+  // the 1-minute minimum so e.g. an empty/zero amount still counts as a
+  // valid 1-minute timer rather than silently becoming "no expiry".
+  const computeDurationMinutes = (on: boolean, amount: string, unit: DurationUnitId): number | null =>
+    on ? Math.max(MIN_DURATION_MINUTES, Math.round((Number(amount) || 0) * minutesPerUnit(unit))) : null;
   const loadTradingBots = async () => { try { const res = await fetch("/api/bots", { cache: "no-store" }); if (!res.ok) return; const result = await res.json(); if (Array.isArray(result.bots)) setTradingBots(result.bots); } catch { /* ignore */ } finally { setTradingBotsLoaded(true); } };
   const loadBotSubHistory = async () => { try { const res = await fetch("/api/bot-subscriptions", { cache: "no-store" }); if (!res.ok) return; const result = await res.json(); if (Array.isArray(result.subscriptions)) setBotSubHistory(result.subscriptions); } catch { /* ignore */ } };
   const loadBotInstances = async () => { try { const res = await fetch("/api/bot-instances", { cache: "no-store" }); if (!res.ok) return; const result = await res.json(); if (Array.isArray(result.instances)) setBotInstances(result.instances); } catch { /* ignore */ } };
@@ -731,13 +776,38 @@ function HomePageInner() {
     {currency !== "USD" && tradeAmount && Number(tradeAmount) > 0 && <p className="form-hint">≈ {money(Number(tradeAmount))}</p>}
     <div className="trade-details"><div><span>Indicative market price</span><strong>{marketPrice(currentAsset.price)}</strong></div><div><span>You'll {side === "buy" ? "receive" : "sell"}</span><strong>≈ {tradeAmount && currentAsset.price > 0 ? fmtQty(Math.floor((Number(tradeAmount) / currentAsset.price) * 1e8) / 1e8) : "0"} {symbol}</strong></div><div><span>Available</span><strong>{side === "buy" ? money(data.user.cashBalance) : `${fmtQty(Number(data.holdings.find(h => h.symbol === symbol)?.quantity ?? 0))} ${symbol}`}</strong></div></div>
     <button className={`primary-btn full-btn ${side === "sell" ? "sell-btn" : ""}`} disabled={loading || !ready || !quoteLive}>{loading ? "Processing..." : !quoteLive ? "Waiting for live prices" : `${side === "buy" ? "Buy" : "Sell"} ${symbol}`} <ArrowRight size={17}/></button>
-    <p className={`trade-quote-note ${quoteLive ? "" : "offline"}`}>{quoteLive ? "Final paper-trade price is verified by the server at execution." : "Paper trading pauses until current market quotes are available."}</p>
-    <p className="simulation-note"><ShieldCheck size={13}/> Paper trading only. No real funds involved.</p>
+    <p className={`trade-quote-note ${quoteLive ? "" : "offline"}`}>{quoteLive ? "Final paper-trade price is verified by the server at execution." : "Live trading pauses until current market quotes are available."}</p>
+    <p className="simulation-note"><ShieldCheck size={13}/> Live trading </p>
   </form>;
+  // Shared "custom timer" control used by spot orders, spot market trades,
+  // and margin positions: a No-expiry/Set-a-timer toggle, a free-form
+  // amount+unit input (minimum 1 minute, enforced by computeDurationMinutes
+  // above), and a row of quick-pick chips that just prefill the amount/unit
+  // for convenience.
+  const durationPicker = (on: boolean, setOn: (v: boolean) => void, amount: string, setAmount: (v: string) => void, unit: DurationUnitId, setUnit: (v: DurationUnitId) => void, label: string) => <>
+    <label className="input-label">{label}</label>
+    <div className="segmented full">
+      <button type="button" className={!on ? "active" : ""} onClick={() => setOn(false)}>No expiry</button>
+      <button type="button" className={on ? "active" : ""} onClick={() => setOn(true)}>Custom timer</button>
+    </div>
+    {on && <>
+      <div className="duration-custom-row">
+        <input type="number" min={1} step="1" value={amount} onChange={e => setAmount(e.target.value)} className="duration-amount-input" aria-label="Duration amount"/>
+        <div className="select-wrap duration-unit-select"><select value={unit} onChange={e => setUnit(e.target.value as DurationUnitId)}>{DURATION_UNITS.map(u => <option key={u.id} value={u.id}>{u.label}</option>)}</select><ChevronDown size={16}/></div>
+      </div>
+      <div className="duration-presets-row">{DURATION_PRESETS.map(p => <button type="button" key={p.label} className="duration-preset-chip" onClick={() => {
+        if (p.minutes >= 1440 && p.minutes % 1440 === 0) { setUnit("days"); setAmount(String(p.minutes / 1440)); }
+        else if (p.minutes >= 60 && p.minutes % 60 === 0) { setUnit("hours"); setAmount(String(p.minutes / 60)); }
+        else { setUnit("minutes"); setAmount(String(p.minutes)); }
+      }}>{p.label}</button>)}</div>
+      <p className="form-hint">{`Minimum ${MIN_DURATION_MINUTES} minute. Resolves to ${formatDurationMinutes(computeDurationMinutes(true, amount, unit) ?? MIN_DURATION_MINUTES)}.`}</p>
+    </>}
+  </>;
   const spotOrderForm = () => {
     const types = allowedOrderTypesForSide(side);
     const price = orderType === "market" ? currentAsset.price : Number(orderPrice) || 0;
     const qty = tradeAmount && price > 0 ? Math.floor((Number(tradeAmount) / price) * 1e8) / 1e8 : 0;
+    const isTimedMarketTrade = orderType === "market" && orderDurationOn;
     return <form className="trade-form" onSubmit={placeSpotOrder}>
       <div className="segmented full"><button type="button" className={side === "buy" ? "active buy-active" : ""} onClick={() => { setSide("buy"); if (!allowedOrderTypesForSide("buy").includes(orderType)) setOrderType("market"); }}>Buy</button><button type="button" className={side === "sell" ? "active sell-active" : ""} onClick={() => setSide("sell")}>Sell</button></div>
       <label className="input-label">Order type</label>
@@ -748,16 +818,17 @@ function HomePageInner() {
         <label className="input-label">{orderType === "limit" ? "Limit price" : orderType === "stop_loss" ? "Stop trigger price" : "Take-profit trigger price"}</label>
         <div className="amount-input"><span>$</span><input type="number" min="0.00000001" step="any" placeholder={currentAsset.price > 0 ? String(currentAsset.price) : "0.00"} value={orderPrice} onChange={e => setOrderPrice(e.target.value)} required/><span>USD</span></div>
       </>}
+      {durationPicker(orderDurationOn, setOrderDurationOn, orderDurationAmount, setOrderDurationAmount, orderDurationUnit, setOrderDurationUnit, orderType === "market" ? "Duration — automatically close this trade after" : "Duration — cancel automatically if unfilled after")}
       <label className="input-label">Amount in USD</label>
       <div className="amount-input"><span>$</span><input type="number" min="0.01" step="0.01" placeholder="0.00" value={tradeAmount} onChange={e => setTradeAmount(e.target.value)} required/><span>USD</span></div>
       {currency !== "USD" && tradeAmount && Number(tradeAmount) > 0 && <p className="form-hint">≈ {money(Number(tradeAmount))}</p>}
       <div className="trade-details">
         <div><span>{orderType === "market" ? "Indicative market price" : "Order price"}</span><strong>{price > 0 ? marketPrice(price) : "—"}</strong></div>
-        <div><span>You'll {side === "buy" ? "receive" : "sell"}</span><strong>≈ {qty ? fmtQty(qty) : "0"} {symbol}</strong></div>
-        <div><span>Available</span><strong>{side === "buy" ? money(data.user.cashBalance) : `${fmtQty(Number(data.holdings.find(h => h.symbol === symbol)?.quantity ?? 0))} ${symbol}`}</strong></div>
+        {isTimedMarketTrade ? <div><span>Exposure</span><strong>≈ {qty ? fmtQty(qty) : "0"} {symbol} ({side === "buy" ? "long" : "short"})</strong></div> : <div><span>You'll {side === "buy" ? "receive" : "sell"}</span><strong>≈ {qty ? fmtQty(qty) : "0"} {symbol}</strong></div>}
+        <div><span>Available</span><strong>{side === "buy" || isTimedMarketTrade ? money(data.user.cashBalance) : `${fmtQty(Number(data.holdings.find(h => h.symbol === symbol)?.quantity ?? 0))} ${symbol}`}</strong></div>
       </div>
-      <button className={`primary-btn full-btn ${side === "sell" ? "sell-btn" : ""}`} disabled={loading || !ready || !quoteLive}>{loading ? "Processing..." : !quoteLive ? "Waiting for live prices" : orderType === "market" ? `${side === "buy" ? "Buy" : "Sell"} ${symbol}` : `Place ${orderTypeLabel(orderType)} order`} <ArrowRight size={17}/></button>
-      <p className={`trade-quote-note ${quoteLive ? "" : "offline"}`}>{quoteLive ? (orderType === "market" ? "Final paper-trade price is verified by the server at execution." : "Your order sits in the open-orders book until the trigger price is reached.") : "Paper trading pauses until current market quotes are available."}</p>
+      <button className={`primary-btn full-btn ${side === "sell" ? "sell-btn" : ""}`} disabled={loading || !ready || !quoteLive}>{loading ? "Processing..." : !quoteLive ? "Waiting for live prices" : orderType === "market" ? `${isTimedMarketTrade ? "Open timed" : side === "buy" ? "Buy" : "Sell"} ${symbol}${isTimedMarketTrade ? ` (${side === "buy" ? "long" : "short"})` : ""}` : `Place ${orderTypeLabel(orderType)} order`} <ArrowRight size={17}/></button>
+      <p className={`trade-quote-note ${quoteLive ? "" : "offline"}`}>{quoteLive ? (isTimedMarketTrade ? "This trade opens now at the live price and automatically closes (realizing P&L) after your chosen duration." : orderType === "market" ? "Final paper-trade price is verified by the server at execution." : "Your order sits in the open-orders book until the trigger price is reached.") : "Live trading pauses until current market quotes are available."}</p>
       <p className="simulation-note"><ShieldCheck size={13}/> No trading fees, no slippage — fills happen at the exact quoted price.</p>
     </form>;
   };
@@ -786,26 +857,28 @@ function HomePageInner() {
       <div className="amount-input"><span>$</span><input type="number" min="0" step="any" placeholder="Optional" value={positionTP} onChange={e => setPositionTP(e.target.value)}/><span>USD</span></div>
       <label className="input-label">Stop-loss price (optional)</label>
       <div className="amount-input"><span>$</span><input type="number" min="0" step="any" placeholder="Optional" value={positionSL} onChange={e => setPositionSL(e.target.value)}/><span>USD</span></div>
+      {durationPicker(positionDurationOn, setPositionDurationOn, positionDurationAmount, setPositionDurationAmount, positionDurationUnit, setPositionDurationUnit, "Duration — auto-close at market price after")}
       <button className={`primary-btn full-btn ${positionSide === "short" ? "sell-btn" : ""}`} disabled={openingPosition || !ready || !quoteLive}>{openingPosition ? "Opening..." : !quoteLive ? "Waiting for live prices" : `Open ${leverageX}x ${positionSide}`} <ArrowRight size={17}/></button>
-      <p className={`trade-quote-note ${quoteLive ? "" : "offline"}`}>{quoteLive ? "Position opens at the live market price. Margin is deducted from your available balance immediately." : "Paper trading pauses until current market quotes are available."}</p>
+      <p className={`trade-quote-note ${quoteLive ? "" : "offline"}`}>{quoteLive ? "Position opens at the live market price. Margin is deducted from your available balance immediately." : "Live trading pauses until current market quotes are available."}</p>
       <p className="margin-risk-note"><AlertTriangle size={13}/> High risk: leveraged positions can be liquidated, losing your full margin. No fees, no slippage — closes happen at the exact trigger price.</p>
     </form>;
   };
   const openOrdersPanel = () => <section className="panel" style={{ marginTop: 20 }}>
     <SectionHead title="Open orders" subtitle="Pending limit, stop-loss, and take-profit orders"/>
-    {!ordersLoaded ? <div className="no-results">Loading orders...</div> : myOrders.open.length === 0 ? <EmptyState icon={Clock3} title="No open orders" text="Place a limit, stop-loss, or take-profit order above to see it here."/> : <div className="table-scroll"><table className="data-table"><thead><tr><th>Asset</th><th>Type</th><th>Side</th><th>Quantity</th><th>Trigger price</th><th>Placed</th><th></th></tr></thead><tbody>{myOrders.open.map(o => { const a = getAsset(o.symbol); return <tr key={o.id}>
+    {!ordersLoaded ? <div className="no-results">Loading orders...</div> : myOrders.open.length === 0 ? <EmptyState icon={Clock3} title="No open orders" text="Place a limit, stop-loss, or take-profit order above to see it here."/> : <div className="table-scroll"><table className="data-table"><thead><tr><th>Asset</th><th>Type</th><th>Side</th><th>Quantity</th><th>Trigger price</th><th>Placed</th><th>Expires</th><th></th></tr></thead><tbody>{myOrders.open.map(o => { const a = getAsset(o.symbol); return <tr key={o.id}>
       <td><div className="coin-cell">{a && <AssetIcon asset={a} size={30}/>}<div><strong>{a?.name ?? o.symbol}</strong><span>{o.symbol}</span></div></div></td>
       <td>{orderTypeLabel(o.type)}</td>
       <td><span className={`type-pill ${o.side}`}>{o.side === "buy" ? <ArrowDownLeft size={13}/> : <ArrowUpRight size={13}/>} {o.side}</span></td>
       <td className="table-strong">{fmtQty(Number(o.quantity))} {o.symbol}</td>
       <td>{marketPrice(Number(o.triggerPrice))}</td>
       <td className="muted-cell">{timeAgo(o.createdAt)}</td>
+      <td className="muted-cell">{timeLeftLabel(o.expiresAt)}</td>
       <td><button className="icon-btn" title="Cancel order" disabled={cancellingOrderId === o.id} onClick={() => cancelOrder(o.id)}>{cancellingOrderId === o.id ? <RefreshCw size={16} className="spin"/> : <Trash2 size={16}/>}</button></td>
     </tr>; })}</tbody></table></div>}
   </section>;
   const openPositionsPanel = () => <section className="panel" style={{ marginTop: 20 }}>
     <SectionHead title="Open positions" subtitle="Leveraged long/short positions · live P&L"/>
-    {!positionsLoaded ? <div className="no-results">Loading positions...</div> : myPositions.open.length === 0 ? <EmptyState icon={Zap} title="No open positions" text="Open a leveraged long or short position above to see it here."/> : <div className="table-scroll"><table className="data-table"><thead><tr><th>Asset</th><th>Side</th><th>Leverage</th><th>Margin</th><th>Entry</th><th>Mark price</th><th>Liquidation</th><th>P&L</th><th></th></tr></thead><tbody>{myPositions.open.map(p => { const a = getAsset(p.symbol); const pnl = p.unrealizedPnl ?? positionPnl(p.side, Number(p.entryPrice), p.currentPrice ?? Number(p.entryPrice), Number(p.quantity)); return <tr key={p.id}>
+    {!positionsLoaded ? <div className="no-results">Loading positions...</div> : myPositions.open.length === 0 ? <EmptyState icon={Zap} title="No open positions" text="Open a leveraged long or short position above to see it here."/> : <div className="table-scroll"><table className="data-table"><thead><tr><th>Asset</th><th>Side</th><th>Leverage</th><th>Margin</th><th>Entry</th><th>Mark price</th><th>Liquidation</th><th>P&L</th><th>Expires</th><th></th></tr></thead><tbody>{myPositions.open.map(p => { const a = getAsset(p.symbol); const pnl = p.unrealizedPnl ?? positionPnl(p.side, Number(p.entryPrice), p.currentPrice ?? Number(p.entryPrice), Number(p.quantity)); return <tr key={p.id}>
       <td><div className="coin-cell">{a && <AssetIcon asset={a} size={30}/>}<div><strong>{a?.name ?? p.symbol}</strong><span>{p.symbol}</span></div></div></td>
       <td><span className={`type-pill ${p.side === "long" ? "buy" : "sell"}`}>{p.side === "long" ? <ArrowUpRight size={13}/> : <ArrowDownLeft size={13}/>} {p.side}</span></td>
       <td className="table-strong">{Number(p.leverage)}x</td>
@@ -814,6 +887,7 @@ function HomePageInner() {
       <td>{marketPrice(p.currentPrice ?? Number(p.entryPrice))}</td>
       <td className="liquidation-cell">{marketPrice(Number(p.liquidationPrice))}</td>
       <td className={`table-strong position-pnl ${pnl >= 0 ? "positive-text" : "negative-text"}`}>{pnl >= 0 ? "+" : ""}{money(pnl)}</td>
+      <td className="muted-cell">{timeLeftLabel(p.expiresAt)}</td>
       <td><button className="icon-btn" title="Close position" disabled={closingPositionId === p.id} onClick={() => closePosition(p.id)}>{closingPositionId === p.id ? <RefreshCw size={16} className="spin"/> : <XCircle size={16}/>}</button></td>
     </tr>; })}</tbody></table></div>}
   </section>;
@@ -867,10 +941,10 @@ function HomePageInner() {
 
   return <div className="app-shell">
     {mobileMenu && <div className="mobile-overlay" onClick={() => setMobileMenu(false)}/>}
-    <aside className={`sidebar ${mobileMenu ? "sidebar-open" : ""}`}><div className="brand" onClick={() => go("Overview")}><div className="brand-icon"><Activity size={23} strokeWidth={3}/></div><span>Ava<span>Trades</span></span><button className="mobile-close" onClick={(e) => { e.stopPropagation(); setMobileMenu(false); }}><X size={19}/></button></div><div className="sidebar-body">{navGroups.map(group => <div className="nav-group" key={group.label}><div className="nav-label">{t(group.label)}</div>{group.items.map(item => { const Icon = item.icon; return <button key={item.name} className={`nav-item ${page === item.name ? "selected" : ""}`} onClick={() => go(item.name)}><Icon size={19} strokeWidth={page === item.name ? 2.25 : 1.8}/><span>{t(item.name)}</span>{item.name === "Trading Signals" && <span className="nav-new">{t("NEW")}</span>}</button>; })}</div>)}</div><div className="sidebar-bottom"><div className="help-card"><span className="help-bubble"><CircleHelp size={18}/></span><strong>{t("Need a hand?")}</strong><p>{t("Explore the platform with your free demo account.")}</p><button onClick={() => { go("Trading Signals"); }}>{t("Explore signals")} <ArrowRight size={14}/></button></div><div className="sidebar-footer"><ShieldCheck size={15}/> {t("Secure paper trading platform")}</div></div></aside>
+    <aside className={`sidebar ${mobileMenu ? "sidebar-open" : ""}`}><div className="brand" onClick={() => go("Overview")}><div className="brand-icon"><Activity size={23} strokeWidth={3}/></div><span>Ava<span>Trades</span></span><button className="mobile-close" onClick={(e) => { e.stopPropagation(); setMobileMenu(false); }}><X size={19}/></button></div><div className="sidebar-body">{navGroups.map(group => <div className="nav-group" key={group.label}><div className="nav-label">{t(group.label)}</div>{group.items.map(item => { const Icon = item.icon; return <button key={item.name} className={`nav-item ${page === item.name ? "selected" : ""}`} onClick={() => go(item.name)}><Icon size={19} strokeWidth={page === item.name ? 2.25 : 1.8}/><span>{t(item.name)}</span>{item.name === "Trading Signals" && <span className="nav-new">{t("NEW")}</span>}</button>; })}</div>)}</div><div className="sidebar-bottom"><div className="help-card"><span className="help-bubble"><CircleHelp size={18}/></span><strong>{t("Need a hand?")}</strong><p>{t("Explore the platform with your free demo account.")}</p><button onClick={() => { go("Trading Signals"); }}>{t("Explore signals")} <ArrowRight size={14}/></button></div><div className="sidebar-footer"><ShieldCheck size={15}/> {t("Secure Live trading platform")}</div></div></aside>
     <div className="main-shell"><header className="topbar"><div className="topbar-left"><button className="icon-btn menu-btn" onClick={() => setMobileMenu(true)} aria-label="Open menu"><Menu size={22}/></button><div className="breadcrumb"><span className="breadcrumb-prefix">{t("Workspace")} <ChevronRight size={15}/></span> <strong>{t(page)}</strong></div></div><div className="topbar-right"><div className={`market-status ${market.status}`} title={market.updatedAt ? `CoinGecko quote updated ${new Date(market.updatedAt).toLocaleString()}` : "CoinGecko market data"} aria-live="polite"><i/><span className="market-status-label">{market.status === "live" ? `Live · ${asOf}` : market.status === "loading" ? "Loading markets" : market.status === "stale" ? "Stale quotes" : "Prices offline"}</span><button className="market-refresh" title="Refresh prices and chart" aria-label="Refresh prices and chart" onClick={() => { void refreshMarket(); setChartRefresh(n => n + 1); }}><RefreshCw size={13} className={marketRefreshing ? "spin" : ""}/></button></div><div className="top-search"><Search size={18}/><input placeholder={t("Search markets...")} value={search} onChange={e => { setSearch(e.target.value); if (e.target.value) setPage("Markets"); }} onFocus={() => {}}/><span>⌘ K</span></div><span className="topbar-divider"/><button className="theme-toggle" aria-label={theme === "dark" ? t("Switch to light mode") : t("Switch to dark mode")} title={theme === "dark" ? t("Switch to light mode") : t("Switch to dark mode")} onClick={toggleTheme}>{theme === "dark" ? <Sun size={19}/> : <Moon size={19}/>}</button><div className="notification-wrap"><button className="icon-btn notif-btn" aria-label={t("Language")} title={t("Language")} onClick={() => { setLanguageMenuOpen(!languageMenuOpen); setNotificationsOpen(false); setProfileOpen(false); }}><Globe size={20}/></button>{languageMenuOpen && <div className="popover language-popover"><div className="popover-title">{t("Language")}{translating && <span className="language-translating">…</span>}</div>{LANGUAGES.map(l => <button key={l.code} className={`language-option ${language === l.code ? "selected" : ""}`} onClick={() => changeLanguage(l.code)}><span className="language-flag">{l.flag}</span><span className="language-name">{l.nativeLabel}</span>{language === l.code && <Check size={15}/>}</button>)}</div>}</div><div className="notification-wrap"><button className="icon-btn notif-btn" aria-label="Notifications" onClick={toggleNotifications}><Bell size={20}/>{data.unreadNotifications > 0 && <i/>}</button>{notificationsOpen && <div className="popover notification-popover"><div className="popover-title">{t("Notifications")} {data.unreadNotifications > 0 && <span>{data.unreadNotifications} new</span>}</div>{data.notifications.length === 0 ? <div className="notification-empty"><Bell size={18}/><p>{t("No notifications yet")}</p></div> : data.notifications.map(n => { const { Icon, color } = notificationVisual(n.type); return <div className={`notification-item ${n.readAt ? "" : "unread"}`} key={n.id}><span className={`notification-icon ${color}`}><Icon size={16}/></span><div><strong>{n.title}</strong><p>{n.message}</p><small>{timeAgo(n.createdAt)}</small></div></div>; })}<button className="notification-see-all" onClick={() => { setNotificationsOpen(false); go("Notifications"); }}>{t("See all notifications")} <ArrowRight size={13}/></button></div>}</div><div className="profile-wrap"><button className="profile-button" onClick={() => { setProfileOpen(!profileOpen); setNotificationsOpen(false); }}><span className="avatar">{data.user.profilePhoto ? <img src={data.user.profilePhoto} alt="" style={{width:"100%",height:"100%",borderRadius:"50%",objectFit:"cover"}}/> : data.user.name.split(" ").map(n => n[0]).slice(0, 2).join("")}</span><span className="profile-meta"><strong>{data.user.name}</strong><small>{data.user.isDemo ? t("Demo account") : (data.plan ? data.plan + " " + t("member") : t("No active plan"))}</small></span><ChevronDown size={16}/></button>{profileOpen && <div className="popover profile-popover"><div className="profile-pop-head"><strong>{data.user.name}</strong><span>{data.user.email ?? t("Exploring in demo mode")}</span></div>{data.user.role === "admin" && <a href="/admin" className="admin-link-btn"><ShieldCheck size={17}/> {t("Admin panel")}</a>}{!data.user.isDemo && <button onClick={() => { setPage("Profile"); setProfileOpen(false); }}><UserRound size={17}/> {t("View profile")}</button>}{data.user.isDemo ? <><button onClick={() => { setAuthMode("register"); setProfileOpen(false); }}><UserRound size={17}/> {t("Create an account")}</button><button onClick={() => { setAuthMode("login"); setProfileOpen(false); }}><LockKeyhole size={17}/> {t("Sign in")}</button></> : <button onClick={logout}><LogOut size={17}/> {t("Log out")}</button>}</div>}</div></div></header>
     <main className="content">
-      {(market.status === "stale" || market.status === "unavailable") && <div className="market-alert" role="status"><Clock3 size={17}/><span><strong>{market.status === "stale" ? "Market data is stale." : "Market prices are temporarily unavailable."}</strong> {market.status === "stale" ? `Showing last known CoinGecko quotes${asOf ? ` from ${asOf}` : ""}.` : "Check the connection or try again shortly."} Paper trading is paused until live prices return.</span><button onClick={() => void refreshMarket()}>Retry</button></div>}
+      {(market.status === "stale" || market.status === "unavailable") && <div className="market-alert" role="status"><Clock3 size={17}/><span><strong>{market.status === "stale" ? "Market data is stale." : "Market prices are temporarily unavailable."}</strong> {market.status === "stale" ? `Showing last known CoinGecko quotes${asOf ? ` from ${asOf}` : ""}.` : "Check the connection or try again shortly."} Live trading is paused until live prices return.</span><button onClick={() => void refreshMarket()}>Retry</button></div>}
       {data.user.accountStatus !== "active" && <div className={`account-status-banner ${data.user.accountStatus}`} role="status">
         <AlertTriangle size={17}/>
         <span>
@@ -882,13 +956,13 @@ function HomePageInner() {
         </span>
       </div>}
       {page === "Overview" && <>
-        <div className="welcome-row"><div><div className="eyebrow">{date.toUpperCase()}</div><h1>{t("Good to see you,")} {firstName} <span className="wave">✌️</span></h1><p>{t("Here's what's happening with your portfolio today.")}</p></div><div className="welcome-actions"><span className="demo-badge"><span/> {data.user.isDemo ? t("Demo account") : t("Paper trading")}</span><button className="outline-btn" onClick={() => go("Deposit")}><Plus size={17}/> {t("Add funds")}</button></div></div>
+        <div className="welcome-row"><div><div className="eyebrow">{date.toUpperCase()}</div><h1>{t("Good to see you,")} {firstName} <span className="wave">✌️</span></h1><p>{t("Here's what's happening with your portfolio today.")}</p></div><div className="welcome-actions"><span className="demo-badge"><span/> {data.user.isDemo ? t("Demo account") : t("Live trading")}</span><button className="outline-btn" onClick={() => go("Deposit")}><Plus size={17}/> {t("Add funds")}</button></div></div>
         <div className="stats-grid six">
           {card(Wallet, "Total balance", money(totalBalance), <span>Cash, invested assets, and profits</span>, "blue")}
-          {card(Target, "Target balance", money(data.user.targetBalance), <span>Set by admin · not included in total</span>, "orange")}
+          {card(Target, "Target balance", money(data.user.targetBalance), <span>Trade target</span>, "orange")}
           {card(Activity, "Portfolio value", money(portfolioValue), <span>{data.holdings.length} assets held</span>, "purple")}
-          {card(CreditCard, "Available cash", money(data.user.cashBalance), <span>Ready for paper trades</span>, "orange")}
-          {card(Gift, "Profits", money(data.user.profitBalance), <span>Credited by admin</span>, "green")}
+          {card(CreditCard, "Available cash", money(data.user.cashBalance), <span>Ready for trades</span>, "orange")}
+          {card(Gift, "Profits", money(data.user.profitBalance), <span>Earned from trading</span>, "green")}
           {card(TrendingUp, "Unrealized profit / loss", Number.isFinite(pnl) ? `${pnl >= 0 ? "+" : "-"}${money(Math.abs(pnl))}` : "—", <>{hasQuotes && costBasis > 0 && <span className={pnl >= 0 ? "up-tag" : "negative-tag"}>{pnl >= 0 ? <ArrowUpRight size={13}/> : <ArrowDownRight size={13}/>} {pnl >= 0 ? "+" : ""}{pnlPercent.toFixed(2)}%</span>}<span>vs. your average buy price</span></>, "green")}
         </div>
         <div className="dashboard-grid">
@@ -903,7 +977,7 @@ function HomePageInner() {
             <section className="panel market-panel"><SectionHead title="Market overview" subtitle={market.status === "live" ? `Live CoinGecko quotes · Updated ${asOf}` : market.status === "loading" ? "Loading market prices…" : "Last known CoinGecko quotes"} action={<button className="text-link" onClick={() => go("Markets")}>View all markets <ArrowRight size={16}/></button>}/>{marketTable(assets.slice(0, 4))}</section>
           </div>
           <div className="dashboard-right">
-            <section className="panel quick-trade-panel"><SectionHead title="Quick trade" subtitle="Paper trade at the current quote"/>{tradeForm()}</section>
+            <section className="panel quick-trade-panel"><SectionHead title="Quick trade" subtitle="Live trade at the current quote"/>{tradeForm()}</section>
             <section className="panel allocation-panel"><SectionHead title="Your allocation" subtitle="Portfolio breakdown"/><div className="allocation-content"><div className="donut" style={{ background: allocationBackground }}><div><small>Total value</small><strong>{money(portfolioValue, 0)}</strong></div></div><div className="allocation-legend">{allocations.length && hasQuotes ? allocations.map(item => <div key={item.symbol}><span><i style={{ background: item.color }}/>{item.symbol}</span><strong>{(item.value / portfolioValue * 100).toFixed(1)}%</strong></div>) : <span className="allocation-empty">{hasQuotes ? "No assets held yet" : "Waiting for prices"}</span>}</div></div></section>
           </div>
         </div>
@@ -914,7 +988,7 @@ function HomePageInner() {
         <div className="stats-grid">
           {card(Wallet, "Total portfolio", money(totalBalance), <span>Cash + invested assets + profits</span>)}
           {card(TrendingUp, "Invested value", money(portfolioValue), <span>{data.holdings.length} assets held</span>, "purple")}
-          {card(CreditCard, "Available to trade", money(data.user.cashBalance), <span>In your paper USD wallet</span>, "green")}
+          {card(CreditCard, "Available to trade", money(data.user.cashBalance), <span>In your Live USD wallet</span>, "green")}
           {card(Gift, "Profits", money(data.user.profitBalance), <span>Credited by admin</span>, "orange")}
         </div>
         <div className="two-col portfolio-layout">
@@ -930,7 +1004,7 @@ function HomePageInner() {
         <PageTitle title={t("Trade crypto")} description={t("Live candlestick charts, full order types, and leveraged positions — no fees, no slippage.")}/>
         <div className="trade-layout">
           <section className="panel trade-asset-panel">
-            <div className="trade-asset-head"><div className="coin-cell"><AssetIcon asset={currentAsset} size={48}/><div><h2>{currentAsset.name} <span>{symbol}</span></h2><p>Market data by CoinGecko · paper trading</p></div></div><div style={{ display: "flex", alignItems: "center", gap: 10 }}><button className="icon-btn" title={watchlist.includes(symbol) ? "Remove from watchlist" : "Add to watchlist"} disabled={watchlistBusy === symbol} onClick={() => toggleWatchlist(symbol)}><Star size={20} fill={watchlist.includes(symbol) ? "#f5a623" : "none"} color={watchlist.includes(symbol) ? "#f5a623" : "currentColor"}/></button><span className={`market-open ${quoteLive ? "" : "offline"}`}><span/>{quoteLive ? "Live quote" : "Trading paused"}</span></div></div>
+            <div className="trade-asset-head"><div className="coin-cell"><AssetIcon asset={currentAsset} size={48}/><div><h2>{currentAsset.name} <span>{symbol}</span></h2><p>Market data by CoinGecko · Live trading</p></div></div><div style={{ display: "flex", alignItems: "center", gap: 10 }}><button className="icon-btn" title={watchlist.includes(symbol) ? "Remove from watchlist" : "Add to watchlist"} disabled={watchlistBusy === symbol} onClick={() => toggleWatchlist(symbol)}><Star size={20} fill={watchlist.includes(symbol) ? "#f5a623" : "none"} color={watchlist.includes(symbol) ? "#f5a623" : "currentColor"}/></button><span className={`market-open ${quoteLive ? "" : "offline"}`}><span/>{quoteLive ? "Live quote" : "Trading paused"}</span></div></div>
             <div className="asset-price"><strong>{marketPrice(currentAsset.price)}</strong>{currentAsset.price > 0 && <span className={currentAsset.change >= 0 ? "positive-text" : "negative-text"}>{currentAsset.change >= 0 ? "+" : ""}{currentAsset.change.toFixed(2)}% today</span>}</div>
             <div className="large-chart"><CandlestickChart candles={candles} period={period} status={candleStatus} label={`${currentAsset.name} price`} currency={currency} rate={fxRate}/></div>
             <div className="periods chart-periods">{(["24H", "7D", "30D", "1Y"] as ChartPeriod[]).map(p => <button key={p} className={period === p ? "active" : ""} onClick={() => setPeriod(p)}>{p}</button>)}</div>
@@ -939,7 +1013,7 @@ function HomePageInner() {
           <section className="panel trade-order-panel">
             <div className="segmented full trade-mode-toggle"><button className={tradeMode === "Spot" ? "active" : ""} onClick={() => setTradeMode("Spot")}>Spot</button><button className={tradeMode === "Margin" ? "active" : ""} onClick={() => setTradeMode("Margin")}>Margin</button></div>
             {tradeMode === "Spot"
-              ? <><SectionHead title="Place an order" subtitle="Server-verified paper execution · no fees, no slippage"/>{spotOrderForm()}</>
+              ? <><SectionHead title="Place an order" subtitle="Server-verified Live execution · no fees, no slippage"/>{spotOrderForm()}</>
               : <><SectionHead title="Open a leveraged position" subtitle="Isolated margin · no fees, no slippage"/>{marginOrderForm()}</>}
           </section>
         </div>
@@ -949,7 +1023,7 @@ function HomePageInner() {
       {page === "Markets" && <>
         <PageTitle title={t("Explore markets")} description={t("Discover assets and find your next opportunity using CoinGecko market data.")}><button className="outline-btn" onClick={() => { setSearch(""); setMarketTab("All assets"); }}><SlidersHorizontal size={17}/> Reset filters</button></PageTitle>
         <div className="market-highlights">{assets.slice(0, 3).map(a => <button className="highlight-card" key={a.symbol} onClick={() => { setSymbol(a.symbol); go("Trade"); }}><div className="highlight-top"><div className="coin-cell"><AssetIcon asset={a} size={37}/><div><strong>{a.name}</strong><span>{a.symbol}</span></div></div><ArrowUpRight size={17}/></div><div className="highlight-bottom"><div><strong>{marketPrice(a.price)}</strong>{a.price > 0 ? <span className={a.change >= 0 ? "positive-text" : "negative-text"}>{a.change >= 0 ? "+" : ""}{a.change.toFixed(2)}% today</span> : <span className="price-placeholder">Waiting for quotes</span>}</div><Sparkline values={a.chart} positive={a.change7d >= 0} width={112} height={44}/></div></button>)}</div>
-        <section className="panel"><div className="section-head market-section-head"><div><h2>All cryptocurrencies</h2><p>{market.status === "live" ? `Live prices · updated ${asOf}` : market.status === "loading" ? "Loading prices from CoinGecko…" : "Last known prices · trading paused"}</p></div><div className="market-controls"><div className="market-search"><Search size={17}/><input placeholder="Search assets" value={search} onChange={e => setSearch(e.target.value)}/></div><div className="segmented">{["All assets", "Gainers", "Losers", "Watchlist"].map(t => <button key={t} className={marketTab === t ? "active" : ""} onClick={() => setMarketTab(t)}>{t === "Watchlist" ? `${t} (${watchlist.length})` : t}</button>)}</div></div></div>{marketTable(filteredAssets, true)}<p className="market-data-note"><Activity size={13}/> Aggregated market data by CoinGecko. Prices are indicative; trades remain simulated.</p></section>
+        <section className="panel"><div className="section-head market-section-head"><div><h2>All cryptocurrencies</h2><p>{market.status === "live" ? `Live prices · updated ${asOf}` : market.status === "loading" ? "Loading prices from CoinGecko…" : "Last known prices · trading paused"}</p></div><div className="market-controls"><div className="market-search"><Search size={17}/><input placeholder="Search assets" value={search} onChange={e => setSearch(e.target.value)}/></div><div className="segmented">{["All assets", "Gainers", "Losers", "Watchlist"].map(t => <button key={t} className={marketTab === t ? "active" : ""} onClick={() => setMarketTab(t)}>{t === "Watchlist" ? `${t} (${watchlist.length})` : t}</button>)}</div></div></div>{marketTable(filteredAssets, true)}<p className="market-data-note"><Activity size={13}/> Aggregated market data by CoinGecko. Prices are indicative;</p></section>
       </>}
       {page === "Trading Bot" && <>
         <PageTitle title={t("Trading bots")} description={t("Subscribe to an admin-managed bot strategy, then configure it to trade.")}><span className="demo-badge"><span/> Simulation mode</span></PageTitle>
@@ -1056,11 +1130,11 @@ function HomePageInner() {
             <div className="signal-bottom"><span><Clock3 size={14}/> Updated {a.updatedAt ? new Date(a.updatedAt).toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit" }) : "recently"}</span><button onClick={() => { setSymbol(a.symbol); go("Trade"); }}>View chart <ArrowRight size={15}/></button></div>
           </div>;
         })}</div> : <div className="panel"><EmptyState icon={Signal} title="Market observations unavailable" text="Live market prices have not loaded yet. Try refreshing in a moment."/></div>}
-        <p className="disclaimer">CoinGecko provides market data, not trading advice. All trades and account balances on AvaTrades are simulated.</p>
+        <p className="disclaimer">CoinGecko provides market data, not trading advice. </p>
       </>}
       {page === "Plans" && <>
         <PageTitle title={t("Choose your plan")} description={t("Subscribe weekly to unlock more of the platform. No auto-renewal — resubscribe (or switch) once your week is up.")}/>
-        <div className="plans-intro"><span><Sparkles size={19}/></span> Your current plan is <strong>{data.plan ?? "No active plan"}</strong>{data.planExpiresAt && !!data.planAmount && <> · renews by {new Date(data.planExpiresAt).toLocaleDateString()}</>}. Plan charges are simulated and deducted from your demo balance.</div>
+        <div className="plans-intro"><span><Sparkles size={19}/></span> Your current plan is <strong>{data.plan ?? "No active plan"}</strong>{data.planExpiresAt && !!data.planAmount && <> · renews by {new Date(data.planExpiresAt).toLocaleDateString()}</>}. Plan charges are deducted from your balance.</div>
         {!plansLoaded ? <div className="no-results">Loading plans...</div> : plansCatalog.length === 0 ? <EmptyState icon={Sparkles} title="No plans available yet" text="Check back soon — an admin hasn't added any plans yet."/> : <div className="plans-grid">{plansCatalog.map(p=>{
           const isCurrent = !!p.mySubscription?.isCurrent;
           const left = p.mySubscription ? daysLeft(p.mySubscription.expiresAt) : 0;
@@ -1075,7 +1149,7 @@ function HomePageInner() {
             <p className="subtle-label" style={{marginTop:10}}>{p.activeSubscribers} active subscriber{p.activeSubscribers===1?"":"s"}</p>
           </div>;
         })}</div>}
-        <p className="disclaimer">This is a simulation. No real billing occurs and plans do not enable live exchange connectivity.</p>
+        <p className="disclaimer"></p>
         <div className="section-title-row"><div><h2>My plan subscriptions</h2><p>Your plan subscription history</p></div></div>
         {planSubHistory.length === 0 ? <EmptyState icon={History} title="No subscriptions yet" text="Choose a plan above to see your history here."/> : <div className="table-scroll"><table className="data-table"><thead><tr><th>Plan</th><th>Amount</th><th>Started</th><th>Expires</th><th>Status</th></tr></thead><tbody>{planSubHistory.map(s=>{
           const left = daysLeft(s.expiresAt);
@@ -1248,15 +1322,16 @@ function HomePageInner() {
           <section className="panel"><div className="section-head"><div><h2>All trades</h2><p>Your complete order history</p></div><div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center" }}>{searchBox}<div className="segmented">{["All","Buy","Sell"].map(t=><button key={t} className={historyTab===t?"active":""} onClick={()=>setHistoryTab(t)}>{t}</button>)}</div><button className="outline-btn" disabled={visibleTrades.length === 0} onClick={() => downloadCsv("trades", visibleTrades.map(t => ({ Date: new Date(t.createdAt).toISOString(), Symbol: t.symbol, Side: t.side, Quantity: t.quantity, Price: t.price, Total: t.total })))}><Download size={15}/> Export CSV</button></div></div><div className="table-scroll"><table className="data-table"><thead><tr><th>Asset</th><th>Type</th><th>Quantity</th><th>Price</th><th>Total</th><th>Date</th><th>Status</th></tr></thead><tbody>{visibleTrades.map(t=>{const a=getAsset(t.symbol);return <tr key={t.id}><td><div className="coin-cell">{a&&<AssetIcon asset={a} size={34}/>}<div><strong>{a?.name}</strong><span>{t.symbol}{supportBadge(t)}</span></div></div></td><td><span className={`type-pill ${t.side}`}>{t.side==="buy"?<ArrowDownLeft size={13}/>:<ArrowUpRight size={13}/>} {t.side}</span></td><td className="table-strong">{fmtQty(Number(t.quantity))} {t.symbol}</td><td>{marketPrice(Number(t.price))}</td><td className="table-strong">{money(Number(t.total))}</td><td className="muted-cell">{new Date(t.createdAt).toLocaleString("en-US",{month:"short",day:"numeric",year:"numeric"})}</td><td><span className="status-pill"><span/>Completed</span></td></tr>})}</tbody></table>{visibleTrades.length===0&&<EmptyState icon={History} title="No trades found" text="Your completed orders will appear here."/>}</div></section>
         </>}
         {historySection === "Orders" && <>
-          <div className="stats-grid three">{card(Clock3,"Open orders",String(myOrders.open.length),<span>Awaiting trigger price</span>)}{card(CheckCircle2,"Filled orders",String(myOrders.history.filter(o=>o.status==="filled").length),<span>Executed limit/stop/TP orders</span>,"green")}{card(X,"Cancelled orders",String(myOrders.history.filter(o=>o.status==="cancelled").length),<span>Withdrawn before filling</span>,"orange")}</div>
-          <section className="panel"><SectionHead title="All orders" subtitle="Limit, stop-loss, and take-profit orders — market orders fill instantly and appear under Trades" action={<div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center" }}>{searchBox}<button className="outline-btn" disabled={visibleOrders.length === 0} onClick={() => downloadCsv("orders", visibleOrders.map(o => ({ Placed: new Date(o.createdAt).toISOString(), Symbol: o.symbol, Type: o.type, Side: o.side, Quantity: o.quantity, TriggerPrice: o.triggerPrice, Status: o.status })))}><Download size={15}/> Export CSV</button></div>}/>
-            {!ordersLoaded ? <div className="no-results">Loading orders...</div> : visibleOrders.length === 0 ? <EmptyState icon={Clock3} title="No orders found" text="Place a limit, stop-loss, or take-profit order from the Trade page to see it here."/> : <div className="table-scroll"><table className="data-table"><thead><tr><th>Asset</th><th>Type</th><th>Side</th><th>Quantity</th><th>Trigger price</th><th>Placed</th><th>Status</th><th></th></tr></thead><tbody>{visibleOrders.map(o => { const a = getAsset(o.symbol); return <tr key={o.id}>
+          <div className="stats-grid three">{card(Clock3,"Open orders",String(myOrders.open.length),<span>Awaiting trigger price</span>)}{card(CheckCircle2,"Filled orders",String(myOrders.history.filter(o=>o.status==="filled").length),<span>Executed limit/stop/TP orders</span>,"green")}{card(X,"Cancelled / expired",String(myOrders.history.filter(o=>o.status==="cancelled"||o.status==="expired").length),<span>Withdrawn or passed their duration</span>,"orange")}</div>
+          <section className="panel"><SectionHead title="All orders" subtitle="Limit, stop-loss, and take-profit orders — market orders fill instantly and appear under Trades" action={<div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center" }}>{searchBox}<button className="outline-btn" disabled={visibleOrders.length === 0} onClick={() => downloadCsv("orders", visibleOrders.map(o => ({ Placed: new Date(o.createdAt).toISOString(), Symbol: o.symbol, Type: o.type, Side: o.side, Quantity: o.quantity, TriggerPrice: o.triggerPrice, Status: o.status, Expires: o.expiresAt ? new Date(o.expiresAt).toISOString() : "" })))}><Download size={15}/> Export CSV</button></div>}/>
+            {!ordersLoaded ? <div className="no-results">Loading orders...</div> : visibleOrders.length === 0 ? <EmptyState icon={Clock3} title="No orders found" text="Place a limit, stop-loss, or take-profit order from the Trade page to see it here."/> : <div className="table-scroll"><table className="data-table"><thead><tr><th>Asset</th><th>Type</th><th>Side</th><th>Quantity</th><th>Trigger price</th><th>Placed</th><th>Expires</th><th>Status</th><th></th></tr></thead><tbody>{visibleOrders.map(o => { const a = getAsset(o.symbol); return <tr key={o.id}>
               <td><div className="coin-cell">{a && <AssetIcon asset={a} size={32}/>}<div><strong>{a?.name ?? o.symbol}</strong><span>{o.symbol}</span></div></div></td>
               <td>{orderTypeLabel(o.type)}</td>
               <td><span className={`type-pill ${o.side}`}>{o.side === "buy" ? <ArrowDownLeft size={13}/> : <ArrowUpRight size={13}/>} {o.side}</span></td>
               <td className="table-strong">{fmtQty(Number(o.quantity))} {o.symbol}</td>
               <td>{marketPrice(Number(o.triggerPrice))}</td>
               <td className="muted-cell">{new Date(o.createdAt).toLocaleString("en-US",{month:"short",day:"numeric",year:"numeric"})}</td>
+              <td className="muted-cell">{o.status === "open" ? timeLeftLabel(o.expiresAt) : (o.expiresAt ? "Had expiry" : "No expiry")}</td>
               <td><span className={`status-pill ${o.status}`}><span/>{o.status[0].toUpperCase()+o.status.slice(1)}</span></td>
               <td>{o.status === "open" && <button className="icon-btn" title="Cancel order" disabled={cancellingOrderId === o.id} onClick={() => cancelOrder(o.id)}>{cancellingOrderId === o.id ? <RefreshCw size={16} className="spin"/> : <Trash2 size={16}/>}</button>}</td>
             </tr>; })}</tbody></table></div>}
@@ -1264,8 +1339,8 @@ function HomePageInner() {
         </>}
         {historySection === "Positions" && <>
           <div className="stats-grid three">{card(Zap,"Open positions",String(myPositions.open.length),<span>Live leveraged exposure</span>)}{card(TrendingUp,"Closed in profit",String(myPositions.history.filter(p=>Number(p.realizedPnl)>0).length),<span>Manually closed or take-profit</span>,"green")}{card(TrendingDown,"Liquidated",String(myPositions.history.filter(p=>p.status==="liquidated").length),<span>Lost full margin</span>,"orange")}</div>
-          <section className="panel"><SectionHead title="All positions" subtitle="Leveraged long/short positions, open and closed" action={<div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center" }}>{searchBox}<button className="outline-btn" disabled={visiblePositions.length === 0} onClick={() => downloadCsv("positions", visiblePositions.map(p => ({ Symbol: p.symbol, Side: p.side, Leverage: p.leverage, Margin: p.margin, Entry: p.entryPrice, Liquidation: p.liquidationPrice, ClosedAt: p.closedAt ? new Date(p.closedAt).toISOString() : "", Status: p.status })))}><Download size={15}/> Export CSV</button></div>}/>
-            {!positionsLoaded ? <div className="no-results">Loading positions...</div> : visiblePositions.length === 0 ? <EmptyState icon={Zap} title="No positions found" text="Open a leveraged long or short position from the Trade page to see it here."/> : <div className="table-scroll"><table className="data-table"><thead><tr><th>Asset</th><th>Side</th><th>Leverage</th><th>Margin</th><th>Entry</th><th>Liquidation</th><th>Closed at</th><th>P&L</th><th>Status</th><th></th></tr></thead><tbody>{visiblePositions.map(p => { const a = getAsset(p.symbol); const pnl = p.status === "open" ? (p.unrealizedPnl ?? positionPnl(p.side, Number(p.entryPrice), p.currentPrice ?? Number(p.entryPrice), Number(p.quantity))) : Number(p.realizedPnl ?? 0); return <tr key={p.id}>
+          <section className="panel"><SectionHead title="All positions" subtitle="Leveraged long/short positions, open and closed" action={<div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center" }}>{searchBox}<button className="outline-btn" disabled={visiblePositions.length === 0} onClick={() => downloadCsv("positions", visiblePositions.map(p => ({ Symbol: p.symbol, Side: p.side, Leverage: p.leverage, Margin: p.margin, Entry: p.entryPrice, Liquidation: p.liquidationPrice, ClosedAt: p.closedAt ? new Date(p.closedAt).toISOString() : "", Status: p.status, CloseReason: p.closeReason ?? "", Expires: p.expiresAt ? new Date(p.expiresAt).toISOString() : "" })))}><Download size={15}/> Export CSV</button></div>}/>
+            {!positionsLoaded ? <div className="no-results">Loading positions...</div> : visiblePositions.length === 0 ? <EmptyState icon={Zap} title="No positions found" text="Open a leveraged long or short position from the Trade page to see it here."/> : <div className="table-scroll"><table className="data-table"><thead><tr><th>Asset</th><th>Side</th><th>Leverage</th><th>Margin</th><th>Entry</th><th>Liquidation</th><th>Closed at</th><th>Reason</th><th>Expires</th><th>P&L</th><th>Status</th><th></th></tr></thead><tbody>{visiblePositions.map(p => { const a = getAsset(p.symbol); const pnl = p.status === "open" ? (p.unrealizedPnl ?? positionPnl(p.side, Number(p.entryPrice), p.currentPrice ?? Number(p.entryPrice), Number(p.quantity))) : Number(p.realizedPnl ?? 0); return <tr key={p.id}>
               <td><div className="coin-cell">{a && <AssetIcon asset={a} size={32}/>}<div><strong>{a?.name ?? p.symbol}</strong><span>{p.symbol}</span></div></div></td>
               <td><span className={`type-pill ${p.side === "long" ? "buy" : "sell"}`}>{p.side === "long" ? <ArrowUpRight size={13}/> : <ArrowDownLeft size={13}/>} {p.side}</span></td>
               <td className="table-strong">{Number(p.leverage)}x</td>
@@ -1273,6 +1348,8 @@ function HomePageInner() {
               <td>{marketPrice(Number(p.entryPrice))}</td>
               <td className="liquidation-cell">{marketPrice(Number(p.liquidationPrice))}</td>
               <td className="muted-cell">{p.closedAt ? new Date(p.closedAt).toLocaleString("en-US",{month:"short",day:"numeric",year:"numeric"}) : "—"}</td>
+              <td className="muted-cell">{p.status === "open" ? "—" : closeReasonLabel(p.closeReason)}</td>
+              <td className="muted-cell">{p.status === "open" ? timeLeftLabel(p.expiresAt) : (p.expiresAt ? "Had expiry" : "No expiry")}</td>
               <td className={`table-strong position-pnl ${pnl >= 0 ? "positive-text" : "negative-text"}`}>{pnl >= 0 ? "+" : ""}{money(pnl)}</td>
               <td><span className={`status-pill ${p.status}`}><span/>{p.status[0].toUpperCase()+p.status.slice(1)}</span></td>
               <td>{p.status === "open" && <button className="icon-btn" title="Close position" disabled={closingPositionId === p.id} onClick={() => closePosition(p.id)}>{closingPositionId === p.id ? <RefreshCw size={16} className="spin"/> : <XCircle size={16}/>}</button>}</td>
@@ -1281,7 +1358,7 @@ function HomePageInner() {
         </>}
         </>;
       })()}
-      <footer className="main-footer"><span>© 2026 AvaTrades. Built for curious traders.</span><span><ShieldCheck size={14}/> Simulation only · Not financial advice</span></footer>
+      <footer className="main-footer"><span>© 2026 AvaTrades. Built for curious traders.</span><span><ShieldCheck size={14}/>  · Not financial advice</span></footer>
     </main></div>
     {toast && <div className={`toast ${toast.error ? "error":""}`}><span>{toast.error ? <X size={17}/>:<Check size={17}/>}</span>{toast.text}<button onClick={()=>setToast(null)}><X size={15}/></button></div>}
     {authMode==="login" && <div className="modal-overlay" onMouseDown={e=>{if(e.target===e.currentTarget)setAuthMode(null);}}><div className="auth-modal"><button className="modal-close" onClick={()=>setAuthMode(null)} aria-label="Close"><X size={20}/></button><div className="modal-brand"><div className="brand-icon"><Activity size={23} strokeWidth={3}/></div>Ava<span>Trades</span></div><h2>{t("Welcome back")}</h2><p>{t("Sign in to pick up right where you left off.")}</p><form onSubmit={authenticate}><label className="input-label">{t("Email or username")}</label><input className="text-input" placeholder="you@example.com or username" value={authIdentifier} onChange={e=>setAuthIdentifier(e.target.value)} required/><label className="input-label">{t("Password")}</label><input className="text-input" type="password" placeholder="At least 8 characters" value={authPassword} onChange={e=>setAuthPassword(e.target.value)} required/><div className="modal-forgot"><button type="button" onClick={()=>{setAuthMode(null);setForgotPasswordOpen(true);}}>{t("Forgot password?")}</button></div><button className="primary-btn full-btn" disabled={loading}>{loading?t("Please wait..."):t("Sign in")}<ArrowRight size={17}/></button></form><div className="modal-switch">{t("New to AvaTrades?")} <button onClick={()=>setAuthMode("register")}>{t("Create account")}</button></div><div className="modal-security"><LockKeyhole size={14}/> {t("Your account is secured with encrypted credentials")}</div></div></div>}

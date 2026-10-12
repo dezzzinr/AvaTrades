@@ -145,10 +145,16 @@ export const orders = pgTable("orders", {
   // The limit price for "limit" orders, or the trigger level for
   // "stop_loss"/"take_profit" orders. Fills happen at exactly this price.
   triggerPrice: numeric("trigger_price", { precision: 24, scale: 8 }).notNull(),
-  status: text("status").notNull().default("open"), // open | filled | cancelled
+  status: text("status").notNull().default("open"), // open | filled | cancelled | expired
   filledPrice: numeric("filled_price", { precision: 24, scale: 8 }),
   filledAt: timestamp("filled_at", { withTimezone: true }),
   cancelledAt: timestamp("cancelled_at", { withTimezone: true }),
+  // Optional "good-til-time" expiry: how long the user wants this pending
+  // order to stay live. Null = good-til-cancelled (today's default
+  // behavior - stays open until manually cancelled or price-triggered).
+  // When set and the order hasn't filled by this time, the trading engine
+  // auto-cancels it with status "expired" (see src/lib/trading-engine.ts).
+  expiresAt: timestamp("expires_at", { withTimezone: true }),
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
 });
 
@@ -174,8 +180,14 @@ export const positions = pgTable("positions", {
   stopLossPrice: numeric("stop_loss_price", { precision: 24, scale: 8 }),
   status: text("status").notNull().default("open"), // open | closed | liquidated
   closePrice: numeric("close_price", { precision: 24, scale: 8 }),
-  closeReason: text("close_reason"), // manual | take_profit | stop_loss | liquidation
+  closeReason: text("close_reason"), // manual | take_profit | stop_loss | liquidation | duration_expired
   realizedPnl: numeric("realized_pnl", { precision: 18, scale: 2 }),
+  // Optional duration the user chose when opening this position - how long
+  // they want to keep it open. Null = no expiry (today's default behavior -
+  // stays open until manually closed or a take-profit/stop-loss/liquidation
+  // price is hit). When set and still open at this time, the trading engine
+  // auto-closes it at the current market price (see src/lib/trading-engine.ts).
+  expiresAt: timestamp("expires_at", { withTimezone: true }),
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
   closedAt: timestamp("closed_at", { withTimezone: true }),
 });
