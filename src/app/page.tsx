@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
-import { Activity, AlertTriangle, ArrowDownLeft, ArrowDownRight, ArrowLeftRight, ArrowRight, ArrowUpRight, Bell, BellRing, Bot, CalendarDays, Check, CheckCircle2, ChevronDown, ChevronLeft, ChevronRight, CircleHelp, Clock3, Copy, CreditCard, Download, Eye, EyeOff, FileText, Gift, Globe, Hourglass, History, LayoutDashboard, LockKeyhole, LogOut, Menu, MoreHorizontal, Paperclip, Plus, RefreshCw, Search, Settings2, ShieldCheck, Signal, SlidersHorizontal, Sparkles, Star, Moon, Sun, Trash2, TrendingDown, TrendingUp, UploadCloud, UserRound, UsersRound, Wallet, WandSparkles, X, XCircle, Zap } from "lucide-react";
+import { Activity, AlertTriangle, ArrowDownLeft, ArrowDownRight, ArrowLeftRight, ArrowRight, ArrowUpRight, Bell, BellRing, Bot, CalendarDays, Check, CheckCircle2, ChevronDown, ChevronLeft, ChevronRight, CircleHelp, Clock3, Copy, CreditCard, Download, Eye, EyeOff, FileText, Gift, Globe, Hourglass, History, LayoutDashboard, LockKeyhole, LogOut, Mail, Menu, MoreHorizontal, Paperclip, Plus, RefreshCw, Search, Settings2, ShieldCheck, Signal, SlidersHorizontal, Sparkles, Star, Moon, Sun, Trash2, TrendingDown, TrendingUp, UploadCloud, UserRound, UsersRound, Wallet, WandSparkles, X, XCircle, Zap } from "lucide-react";
 import { assets as catalogAssets, getAsset as getCatalogAsset, type Asset, type Candle, type ChartPoint, type ChartPeriod, type MarketSnapshot } from "@/lib/market";
 import { formatMoney, formatMarketPrice, formatCompactMoney } from "@/lib/currency";
 import { DEPOSIT_METHODS, MAX_RECEIPT_BYTES, type DepositMethod } from "@/lib/deposits";
@@ -19,6 +19,7 @@ import { AVATAR_COLORS } from "@/lib/copy-trading";
 import { flagEmoji, countryInfo } from "@/lib/countries";
 import { ConfirmProvider, useConfirm } from "@/components/confirm-provider";
 import { ThemeProvider, useTheme } from "@/components/theme-provider";
+import { notificationVisual, timeAgo } from "@/lib/notification-visual";
 
 type Page = "Overview" | "Portfolio" | "Trade" | "Trading Bot" | "Markets" | "Plans" | "Copy Trading" | "Deposit" | "Withdraw" | "Trading Signals" | "Transactions" | "Trade History" | "Notifications" | "Profile";
 const PAGE_VALUES: Page[] = ["Overview", "Portfolio", "Trade", "Trading Bot", "Markets", "Plans", "Copy Trading", "Deposit", "Withdraw", "Trading Signals", "Transactions", "Trade History", "Notifications", "Profile"];
@@ -26,47 +27,8 @@ const LAST_PAGE_KEY = "nexa_last_page";
 type DepositAccount = { id: string; method: string; label: string; instructions: string };
 type DepositRequest = { id: string; method: string; amount: string; destinationLabel: string | null; reference: string | null; note: string | null; status: string; adminNote: string | null; receiptFilename: string; createdAt: string; reviewedAt: string | null };
 type WithdrawalRequest = { id: string; method: string; methodLabel: string | null; amount: string; destination: string; note: string | null; status: string; adminNote: string | null; createdAt: string; reviewedAt: string | null };
-type Notification = { id: string; type?: string; title: string; message: string; readAt: string | null; createdAt: string };
-
-// Icon + accent color per notification type, for a quick visual scan of the
-// bell. Falls back to a generic sparkle for unrecognized/legacy types.
-function notificationVisual(type?: string): { Icon: typeof Sparkles; color: string } {
-  switch (type) {
-    case "account_created": return { Icon: UserRound, color: "purple" };
-    case "login": return { Icon: LockKeyhole, color: "blue" };
-    case "password_changed":
-    case "security_question_updated": return { Icon: ShieldCheck, color: "blue" };
-    case "trade_placed":
-    case "order_filled": return { Icon: ArrowLeftRight, color: "green" };
-    case "order_placed": return { Icon: Clock3, color: "blue" };
-    case "order_cancelled": return { Icon: XCircle, color: "red" };
-    case "position_opened": return { Icon: TrendingUp, color: "green" };
-    case "position_closed": return { Icon: TrendingDown, color: "blue" };
-    case "position_auto_closed": return { Icon: AlertTriangle, color: "amber" };
-    case "deposit_submitted":
-    case "deposit_approved": return { Icon: ArrowDownLeft, color: "green" };
-    case "deposit_rejected": return { Icon: XCircle, color: "red" };
-    case "withdrawal_submitted":
-    case "withdrawal_approved": return { Icon: ArrowUpRight, color: "blue" };
-    case "withdrawal_rejected": return { Icon: XCircle, color: "red" };
-    case "bot_subscribed": return { Icon: Bot, color: "purple" };
-    case "bot_cancelled": return { Icon: Bot, color: "red" };
-    case "copy_subscribed": return { Icon: UsersRound, color: "purple" };
-    case "copy_cancelled": return { Icon: UsersRound, color: "red" };
-    case "plan_subscribed": return { Icon: CreditCard, color: "purple" };
-    case "plan_cancelled": return { Icon: CreditCard, color: "red" };
-    case "admin_credit": return { Icon: Wallet, color: "green" };
-    case "admin_debit": return { Icon: Wallet, color: "red" };
-    case "profit_credit": return { Icon: TrendingUp, color: "green" };
-    case "profit_debit": return { Icon: TrendingUp, color: "red" };
-    case "account_status_changed": return { Icon: AlertTriangle, color: "amber" };
-    case "admin_message": return { Icon: ShieldCheck, color: "purple" };
-    case "referral_bonus": return { Icon: Gift, color: "green" };
-    case "price_alert_triggered": return { Icon: Bell, color: "amber" };
-    default: return { Icon: Sparkles, color: "purple" };
-  }
-}
-type AppData = { user: { id: string; name: string; email: string | null; username?: string | null; isDemo: boolean; role: string; cashBalance: number; profitBalance: number; accountStatus: string; maxTradeAmount: number | null; withdrawalsBlocked: boolean; statusReason: string | null; profilePhoto?: string | null; currency?: string; language?: string }; holdings: { id: string; symbol: string; quantity: string; avgPrice: string }[]; trades: { id: string; symbol: string; side: string; quantity: string; price: string; total: string; createdAt: string; placedBy: string | null; adminNote: string | null }[]; transactions: { id: string; type: string; amount: string; description: string; createdAt: string }[]; plan: string | null; planExpiresAt: string | null; planAmount: number | null; notifications: Notification[]; unreadNotifications: number; fx?: { currency: string; rate: number; status: string; updatedAt: string | null } };
+type Notification = { id: string; type?: string; title: string; message: string; readAt: string | null; createdAt: string; aboutUserId?: string | null };
+type AppData = { user: { id: string; name: string; email: string | null; username?: string | null; isDemo: boolean; role: string; emailVerified: boolean; cashBalance: number; profitBalance: number; accountStatus: string; maxTradeAmount: number | null; withdrawalsBlocked: boolean; statusReason: string | null; profilePhoto?: string | null; currency?: string; language?: string }; holdings: { id: string; symbol: string; quantity: string; avgPrice: string }[]; trades: { id: string; symbol: string; side: string; quantity: string; price: string; total: string; createdAt: string; placedBy: string | null; adminNote: string | null }[]; transactions: { id: string; type: string; amount: string; description: string; createdAt: string }[]; plan: string | null; planExpiresAt: string | null; planAmount: number | null; notifications: Notification[]; unreadNotifications: number; fx?: { currency: string; rate: number; status: string; updatedAt: string | null } };
 type CopyTrader = { id: string; name: string; handle: string; avatarInitials: string; avatarColor: string; focus: string; bio: string; riskLevel: string; returnPercent: string; winRate: string; subscriptionAmount: string; subscriptionDurationDays: number; rating: string; country: string; photoUrl: string | null; activeSubscribers: number; mySubscription: { expiresAt: string; amount: string } | null };
 type CopySubscription = { id: string; traderId: string; traderName: string; traderHandle: string; amount: string; startedAt: string; expiresAt: string };
 type TradingBot = { id: string; name: string; description: string; strategy: string; riskLevel: string; minAllocation: string; subscriptionAmount: string; subscriptionDurationDays: number; rating: string; country: string; photoUrl: string | null; activeSubscribers: number; mySubscription: { expiresAt: string; amount: string } | null };
@@ -77,7 +39,7 @@ type PlanSubscription = { id: string; planId: string; planName: string; amount: 
 type Order = { id: string; symbol: string; side: "buy" | "sell"; type: OrderType; quantity: string; triggerPrice: string; status: string; filledPrice: string | null; filledAt: string | null; cancelledAt: string | null; createdAt: string };
 type Position = { id: string; symbol: string; side: PositionSide; leverage: string; margin: string; quantity: string; entryPrice: string; liquidationPrice: string; takeProfitPrice: string | null; stopLossPrice: string | null; status: string; closePrice: string | null; closeReason: string | null; realizedPnl: string | null; createdAt: string; closedAt: string | null; currentPrice?: number; unrealizedPnl?: number };
 const preview: AppData = {
-  user: { id: "preview", name: "Alex Morgan", email: null, username: null, isDemo: true, role: "user", cashBalance: 12540.50, profitBalance: 0, accountStatus: "active", maxTradeAmount: null, withdrawalsBlocked: false, statusReason: null, profilePhoto: null, currency: "USD" },
+  user: { id: "preview", name: "Alex Morgan", email: null, username: null, isDemo: true, role: "user", emailVerified: true, cashBalance: 12540.50, profitBalance: 0, accountStatus: "active", maxTradeAmount: null, withdrawalsBlocked: false, statusReason: null, profilePhoto: null, currency: "USD" },
   holdings: [{ id: "a", symbol: "BTC", quantity: "0.28450000", avgPrice: "61240.00" }, { id: "b", symbol: "ETH", quantity: "3.25000000", avgPrice: "3180.00" }, { id: "c", symbol: "SOL", quantity: "42.00000000", avgPrice: "148.50" }, { id: "d", symbol: "AVAX", quantity: "80.00000000", avgPrice: "34.20" }],
   trades: [{ id: "t1", symbol: "BTC", side: "buy", quantity: "0.08450000", price: "66421.50", total: "5612.62", createdAt: new Date(Date.now() - 7200000).toISOString(), placedBy: null, adminNote: null }, { id: "t2", symbol: "ETH", side: "buy", quantity: "1.25000000", price: "3482.20", total: "4352.75", createdAt: new Date(Date.now() - 90000000).toISOString(), placedBy: null, adminNote: null }, { id: "t3", symbol: "SOL", side: "sell", quantity: "12.00000000", price: "168.40", total: "2020.80", createdAt: new Date(Date.now() - 259200000).toISOString(), placedBy: null, adminNote: null }],
   transactions: [], plan: null, planExpiresAt: null, planAmount: null, notifications: [], unreadNotifications: 0, fx: { currency: "USD", rate: 1, status: "live", updatedAt: null }
@@ -202,6 +164,48 @@ function HomePageInner() {
   const [authIdentifier, setAuthIdentifier] = useState("");
   const [authPassword, setAuthPassword] = useState("");
   const [forgotPasswordOpen, setForgotPasswordOpen] = useState(false);
+  // Email-verification gate: a freshly registered account is signed in
+  // immediately but sees a full-screen "enter your code" gate (rendered
+  // further below) instead of the dashboard until data.user.emailVerified.
+  const [verifyCode, setVerifyCode] = useState("");
+  const [verifying, setVerifying] = useState(false);
+  const [resending, setResending] = useState(false);
+  const [resendCooldown, setResendCooldown] = useState(0);
+  useEffect(() => {
+    if (resendCooldown <= 0) return;
+    const id = setInterval(() => setResendCooldown(s => Math.max(0, s - 1)), 1000);
+    return () => clearInterval(id);
+  }, [resendCooldown]);
+  const verifyEmailCode = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setVerifying(true);
+    try {
+      const res = await fetch("/api/auth", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ action: "verifyEmail", code: verifyCode }) });
+      const result = await res.json();
+      if (!res.ok || !result.success) throw new Error(result.error || "Incorrect code. Please try again.");
+      setVerifyCode("");
+      await refresh();
+      notify("Email verified - welcome to AvaTrades!");
+    } catch (error) {
+      notify(error instanceof Error ? error.message : "Something went wrong. Please try again.", true);
+    } finally {
+      setVerifying(false);
+    }
+  };
+  const resendCode = async () => {
+    setResending(true);
+    try {
+      const res = await fetch("/api/auth", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ action: "resendVerificationCode" }) });
+      const result = await res.json();
+      if (!res.ok || !result.success) throw new Error(result.error || "Could not resend the code.");
+      setResendCooldown(60);
+      notify(result.message || "A new code has been sent to your email.");
+    } catch (error) {
+      notify(error instanceof Error ? error.message : "Something went wrong. Please try again.", true);
+    } finally {
+      setResending(false);
+    }
+  };
   // Demo/guest accounts can look around freely, but any action that would
   // actually create a lasting record (trade, deposit, withdrawal,
   // subscription) prompts sign-up instead of silently going through - this
@@ -405,20 +409,13 @@ function HomePageInner() {
   };
   const action = async (body: Record<string, unknown>) => { if (loading) return false; setLoading(true); try { const res = await fetch("/api/app", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) }); const result = await res.json(); if (!res.ok) throw new Error(result.error || "Something went wrong"); notify(result.message || "Done successfully"); await refresh(); return true; } catch (error) { notify(error instanceof Error ? error.message : "Something went wrong", true); return false; } finally { setLoading(false); } };
   const authenticate = async (e: React.FormEvent) => { e.preventDefault(); setLoading(true); try { const res = await fetch("/api/auth", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ action: "login", identifier: authIdentifier, password: authPassword }) }); const result = await res.json(); if (!res.ok) throw new Error(result.error); setAuthMode(null); setAuthPassword(""); setAuthIdentifier(""); setPage("Overview"); await refresh(); notify("Welcome back!"); } catch (error) { notify(error instanceof Error ? error.message : "Authentication failed", true); } finally { setLoading(false); } };
-  const handleRegistered = async () => { setAuthMode(null); setPage("Overview"); await refresh(); notify("Welcome to NexaTrade! Your account is ready."); };
+  const handleRegistered = async () => { setAuthMode(null); setPage("Overview"); await refresh(); notify("Welcome to AvaTrades! Your account is ready."); };
   const logout = async () => { if (!(await confirm({ title: "Sign out?" }))) return; await fetch("/api/auth", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ action: "logout" }) }); setProfileOpen(false); await refresh(); setPage("Overview"); notify("Switched to a fresh demo workspace"); };
   const toggleNotifications = () => {
     const opening = !notificationsOpen;
     setNotificationsOpen(opening);
     setProfileOpen(false);
     if (opening && data.unreadNotifications > 0) { fetch("/api/notifications", { method: "POST" }).then(() => refresh()).catch(() => {}); }
-  };
-  const timeAgo = (iso: string) => {
-    const diff = Date.now() - new Date(iso).getTime();
-    if (diff < 60000) return "Just now";
-    if (diff < 3600000) return `${Math.floor(diff / 60000)}m ago`;
-    if (diff < 86400000) return `${Math.floor(diff / 3600000)}h ago`;
-    return new Date(iso).toLocaleDateString("en-US", { month: "short", day: "numeric" });
   };
   const go = (p: Page) => { setPage(p); setMobileMenu(false); setProfileOpen(false); window.scrollTo({ top: 0, behavior: "smooth" }); };
   const assets: Asset[] = market.assets.length ? market.assets : catalogAssets;
@@ -845,9 +842,32 @@ function HomePageInner() {
   const tradeTable = (limit?: number) => <div className="table-scroll"><table className="data-table"><thead><tr><th>Asset</th><th>Type</th><th>Amount</th><th>Price</th><th>Total</th><th>Date</th><th>Status</th></tr></thead><tbody>{data.trades.slice(0, limit).map(t => { const a = getAsset(t.symbol); return <tr key={t.id}><td><div className="coin-cell">{a && <AssetIcon asset={a} size={32}/>}<div><strong>{a?.name ?? t.symbol}</strong><span>{t.symbol}{supportBadge(t)}</span></div></div></td><td><span className={`type-pill ${t.side}`}>{t.side === "buy" ? <ArrowDownLeft size={13}/> : <ArrowUpRight size={13}/>} {t.side === "buy" ? "Buy" : "Sell"}</span></td><td className="table-strong">{fmtQty(Number(t.quantity))} {t.symbol}</td><td>{marketPrice(Number(t.price))}</td><td className="table-strong">{money(Number(t.total))}</td><td className="muted-cell">{new Date(t.createdAt).toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" })}</td><td><span className="status-pill"><span/>Completed</span></td></tr>; })}</tbody></table>{data.trades.length === 0 && <EmptyState icon={History} title="No trades yet" text="Your completed trades will appear here."/>}</div>;
   const card = (icon: typeof Wallet, label: string, value: string, foot: React.ReactNode, tone = "blue") => { const Icon = icon; return <div className="stat-card"><div className="stat-top"><span className={`stat-icon ${tone}`}><Icon size={19}/></span><MoreHorizontal size={20} className="dots-icon"/></div><span className="stat-label">{label}</span><strong className="stat-value">{hideBalance ? "••••••" : value}</strong><div className="stat-foot">{foot}</div></div>; };
 
+  // Full-screen gate: a signed-in-but-unverified user sees this instead of
+  // the dashboard until they enter the 4-digit code emailed at signup.
+  // Demo accounts and accounts with no email never hit this (see
+  // needsEmailVerification server-side, mirrored here client-side).
+  if (ready && !data.user.isDemo && data.user.email && !data.user.emailVerified) {
+    return <div className="verify-shell">
+      <div className="verify-card">
+        <div className="modal-brand"><div className="brand-icon"><Activity size={23} strokeWidth={3}/></div>Ava<span>Trades</span></div>
+        <div className="verify-icon"><Mail size={28}/></div>
+        <h2>Verify your email</h2>
+        <p>We sent a 4-digit code to <strong>{data.user.email}</strong>. Enter it below to unlock your account.</p>
+        <form onSubmit={verifyEmailCode}>
+          <input className="verify-code-input" type="text" inputMode="numeric" pattern="[0-9]*" maxLength={4} placeholder="0000" value={verifyCode} onChange={e=>setVerifyCode(e.target.value.replace(/\D/g, "").slice(0, 4))} autoFocus required/>
+          <button className="primary-btn full-btn" disabled={verifying || verifyCode.length !== 4}>{verifying ? "Verifying..." : "Verify email"}<ArrowRight size={17}/></button>
+        </form>
+        <div className="verify-resend">
+          {resendCooldown > 0 ? <span>Resend code in {resendCooldown}s</span> : <button type="button" onClick={resendCode} disabled={resending}>{resending ? "Sending..." : "Resend code"}</button>}
+        </div>
+        <button type="button" className="modal-switch" style={{ background: "none", border: "none", cursor: "pointer" }} onClick={logout}>Wrong email? Log out</button>
+      </div>
+    </div>;
+  }
+
   return <div className="app-shell">
     {mobileMenu && <div className="mobile-overlay" onClick={() => setMobileMenu(false)}/>}
-    <aside className={`sidebar ${mobileMenu ? "sidebar-open" : ""}`}><div className="brand" onClick={() => go("Overview")}><div className="brand-icon"><Activity size={23} strokeWidth={3}/></div><span>Nexa<span>Trade</span></span><button className="mobile-close" onClick={(e) => { e.stopPropagation(); setMobileMenu(false); }}><X size={19}/></button></div><div className="sidebar-body">{navGroups.map(group => <div className="nav-group" key={group.label}><div className="nav-label">{t(group.label)}</div>{group.items.map(item => { const Icon = item.icon; return <button key={item.name} className={`nav-item ${page === item.name ? "selected" : ""}`} onClick={() => go(item.name)}><Icon size={19} strokeWidth={page === item.name ? 2.25 : 1.8}/><span>{t(item.name)}</span>{item.name === "Trading Signals" && <span className="nav-new">{t("NEW")}</span>}</button>; })}</div>)}</div><div className="sidebar-bottom"><div className="help-card"><span className="help-bubble"><CircleHelp size={18}/></span><strong>{t("Need a hand?")}</strong><p>{t("Explore the platform with your free demo account.")}</p><button onClick={() => { go("Trading Signals"); }}>{t("Explore signals")} <ArrowRight size={14}/></button></div><div className="sidebar-footer"><ShieldCheck size={15}/> {t("Secure paper trading platform")}</div></div></aside>
+    <aside className={`sidebar ${mobileMenu ? "sidebar-open" : ""}`}><div className="brand" onClick={() => go("Overview")}><div className="brand-icon"><Activity size={23} strokeWidth={3}/></div><span>Ava<span>Trades</span></span><button className="mobile-close" onClick={(e) => { e.stopPropagation(); setMobileMenu(false); }}><X size={19}/></button></div><div className="sidebar-body">{navGroups.map(group => <div className="nav-group" key={group.label}><div className="nav-label">{t(group.label)}</div>{group.items.map(item => { const Icon = item.icon; return <button key={item.name} className={`nav-item ${page === item.name ? "selected" : ""}`} onClick={() => go(item.name)}><Icon size={19} strokeWidth={page === item.name ? 2.25 : 1.8}/><span>{t(item.name)}</span>{item.name === "Trading Signals" && <span className="nav-new">{t("NEW")}</span>}</button>; })}</div>)}</div><div className="sidebar-bottom"><div className="help-card"><span className="help-bubble"><CircleHelp size={18}/></span><strong>{t("Need a hand?")}</strong><p>{t("Explore the platform with your free demo account.")}</p><button onClick={() => { go("Trading Signals"); }}>{t("Explore signals")} <ArrowRight size={14}/></button></div><div className="sidebar-footer"><ShieldCheck size={15}/> {t("Secure paper trading platform")}</div></div></aside>
     <div className="main-shell"><header className="topbar"><div className="topbar-left"><button className="icon-btn menu-btn" onClick={() => setMobileMenu(true)} aria-label="Open menu"><Menu size={22}/></button><div className="breadcrumb"><span className="breadcrumb-prefix">{t("Workspace")} <ChevronRight size={15}/></span> <strong>{t(page)}</strong></div></div><div className="topbar-right"><div className={`market-status ${market.status}`} title={market.updatedAt ? `CoinGecko quote updated ${new Date(market.updatedAt).toLocaleString()}` : "CoinGecko market data"} aria-live="polite"><i/><span className="market-status-label">{market.status === "live" ? `Live · ${asOf}` : market.status === "loading" ? "Loading markets" : market.status === "stale" ? "Stale quotes" : "Prices offline"}</span><button className="market-refresh" title="Refresh prices and chart" aria-label="Refresh prices and chart" onClick={() => { void refreshMarket(); setChartRefresh(n => n + 1); }}><RefreshCw size={13} className={marketRefreshing ? "spin" : ""}/></button></div><div className="top-search"><Search size={18}/><input placeholder={t("Search markets...")} value={search} onChange={e => { setSearch(e.target.value); if (e.target.value) setPage("Markets"); }} onFocus={() => {}}/><span>⌘ K</span></div><span className="topbar-divider"/><button className="theme-toggle" aria-label={theme === "dark" ? t("Switch to light mode") : t("Switch to dark mode")} title={theme === "dark" ? t("Switch to light mode") : t("Switch to dark mode")} onClick={toggleTheme}>{theme === "dark" ? <Sun size={19}/> : <Moon size={19}/>}</button><div className="notification-wrap"><button className="icon-btn notif-btn" aria-label={t("Language")} title={t("Language")} onClick={() => { setLanguageMenuOpen(!languageMenuOpen); setNotificationsOpen(false); setProfileOpen(false); }}><Globe size={20}/></button>{languageMenuOpen && <div className="popover language-popover"><div className="popover-title">{t("Language")}{translating && <span className="language-translating">…</span>}</div>{LANGUAGES.map(l => <button key={l.code} className={`language-option ${language === l.code ? "selected" : ""}`} onClick={() => changeLanguage(l.code)}><span className="language-flag">{l.flag}</span><span className="language-name">{l.nativeLabel}</span>{language === l.code && <Check size={15}/>}</button>)}</div>}</div><div className="notification-wrap"><button className="icon-btn notif-btn" aria-label="Notifications" onClick={toggleNotifications}><Bell size={20}/>{data.unreadNotifications > 0 && <i/>}</button>{notificationsOpen && <div className="popover notification-popover"><div className="popover-title">{t("Notifications")} {data.unreadNotifications > 0 && <span>{data.unreadNotifications} new</span>}</div>{data.notifications.length === 0 ? <div className="notification-empty"><Bell size={18}/><p>{t("No notifications yet")}</p></div> : data.notifications.map(n => { const { Icon, color } = notificationVisual(n.type); return <div className={`notification-item ${n.readAt ? "" : "unread"}`} key={n.id}><span className={`notification-icon ${color}`}><Icon size={16}/></span><div><strong>{n.title}</strong><p>{n.message}</p><small>{timeAgo(n.createdAt)}</small></div></div>; })}<button className="notification-see-all" onClick={() => { setNotificationsOpen(false); go("Notifications"); }}>{t("See all notifications")} <ArrowRight size={13}/></button></div>}</div><div className="profile-wrap"><button className="profile-button" onClick={() => { setProfileOpen(!profileOpen); setNotificationsOpen(false); }}><span className="avatar">{data.user.profilePhoto ? <img src={data.user.profilePhoto} alt="" style={{width:"100%",height:"100%",borderRadius:"50%",objectFit:"cover"}}/> : data.user.name.split(" ").map(n => n[0]).slice(0, 2).join("")}</span><span className="profile-meta"><strong>{data.user.name}</strong><small>{data.user.isDemo ? t("Demo account") : (data.plan ? data.plan + " " + t("member") : t("No active plan"))}</small></span><ChevronDown size={16}/></button>{profileOpen && <div className="popover profile-popover"><div className="profile-pop-head"><strong>{data.user.name}</strong><span>{data.user.email ?? t("Exploring in demo mode")}</span></div>{data.user.role === "admin" && <a href="/admin" className="admin-link-btn"><ShieldCheck size={17}/> {t("Admin panel")}</a>}{!data.user.isDemo && <button onClick={() => { setPage("Profile"); setProfileOpen(false); }}><UserRound size={17}/> {t("View profile")}</button>}{data.user.isDemo ? <><button onClick={() => { setAuthMode("register"); setProfileOpen(false); }}><UserRound size={17}/> {t("Create an account")}</button><button onClick={() => { setAuthMode("login"); setProfileOpen(false); }}><LockKeyhole size={17}/> {t("Sign in")}</button></> : <button onClick={logout}><LogOut size={17}/> {t("Log out")}</button>}</div>}</div></div></header>
     <main className="content">
       {(market.status === "stale" || market.status === "unavailable") && <div className="market-alert" role="status"><Clock3 size={17}/><span><strong>{market.status === "stale" ? "Market data is stale." : "Market prices are temporarily unavailable."}</strong> {market.status === "stale" ? `Showing last known CoinGecko quotes${asOf ? ` from ${asOf}` : ""}.` : "Check the connection or try again shortly."} Paper trading is paused until live prices return.</span><button onClick={() => void refreshMarket()}>Retry</button></div>}
@@ -1035,7 +1055,7 @@ function HomePageInner() {
             <div className="signal-bottom"><span><Clock3 size={14}/> Updated {a.updatedAt ? new Date(a.updatedAt).toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit" }) : "recently"}</span><button onClick={() => { setSymbol(a.symbol); go("Trade"); }}>View chart <ArrowRight size={15}/></button></div>
           </div>;
         })}</div> : <div className="panel"><EmptyState icon={Signal} title="Market observations unavailable" text="Live market prices have not loaded yet. Try refreshing in a moment."/></div>}
-        <p className="disclaimer">CoinGecko provides market data, not trading advice. All trades and account balances on NexaTrade are simulated.</p>
+        <p className="disclaimer">CoinGecko provides market data, not trading advice. All trades and account balances on AvaTrades are simulated.</p>
       </>}
       {page === "Plans" && <>
         <PageTitle title={t("Choose your plan")} description={t("Subscribe weekly to unlock more of the platform. No auto-renewal — resubscribe (or switch) once your week is up.")}/>
@@ -1065,7 +1085,7 @@ function HomePageInner() {
       </>}
       {page === "Profile" && <ProfilePage notify={notify} onRequireAuth={(mode) => setAuthMode(mode)} onProfileUpdated={() => { void refresh(); }}/>}
       {page === "Deposit" && <>
-        <PageTitle title={t("Add funds")} description={t("Send a payment from outside NexaTrade using one of the methods below, then submit your receipt for admin review.")}/>
+        <PageTitle title={t("Add funds")} description={t("Send a payment from outside AvaTrades using one of the methods below, then submit your receipt for admin review.")}/>
         <div className="deposit-note-banner"><Hourglass size={17}/><span>Deposits are <strong>not instant</strong>. Send funds to the destination shown, upload proof of payment, and an admin will verify and credit your balance — usually within a few hours.</span></div>
         <div className="deposit-layout">
           <section className="panel deposit-panel">
@@ -1190,7 +1210,7 @@ function HomePageInner() {
         const pageCount = Math.max(Math.ceil(notifTotal / NOTIF_PAGE_SIZE), 1);
         const currentPageNum = Math.floor(notifOffset / NOTIF_PAGE_SIZE) + 1;
         return <>
-          <PageTitle title={t("Notifications")} description={t("Everything NexaTrade has told you, in one place.")}>
+          <PageTitle title={t("Notifications")} description={t("Everything AvaTrades has told you, in one place.")}>
             {data.unreadNotifications > 0 && <button className="outline-btn" onClick={() => void markAllNotificationsRead()}><Check size={16}/> Mark all read</button>}
           </PageTitle>
           <section className="panel">
@@ -1260,10 +1280,10 @@ function HomePageInner() {
         </>}
         </>;
       })()}
-      <footer className="main-footer"><span>© 2026 NexaTrade. Built for curious traders.</span><span><ShieldCheck size={14}/> Simulation only · Not financial advice</span></footer>
+      <footer className="main-footer"><span>© 2026 AvaTrades. Built for curious traders.</span><span><ShieldCheck size={14}/> Simulation only · Not financial advice</span></footer>
     </main></div>
     {toast && <div className={`toast ${toast.error ? "error":""}`}><span>{toast.error ? <X size={17}/>:<Check size={17}/>}</span>{toast.text}<button onClick={()=>setToast(null)}><X size={15}/></button></div>}
-    {authMode==="login" && <div className="modal-overlay" onMouseDown={e=>{if(e.target===e.currentTarget)setAuthMode(null);}}><div className="auth-modal"><button className="modal-close" onClick={()=>setAuthMode(null)} aria-label="Close"><X size={20}/></button><div className="modal-brand"><div className="brand-icon"><Activity size={23} strokeWidth={3}/></div>Nexa<span>Trade</span></div><h2>{t("Welcome back")}</h2><p>{t("Sign in to pick up right where you left off.")}</p><form onSubmit={authenticate}><label className="input-label">{t("Email or username")}</label><input className="text-input" placeholder="you@example.com or username" value={authIdentifier} onChange={e=>setAuthIdentifier(e.target.value)} required/><label className="input-label">{t("Password")}</label><input className="text-input" type="password" placeholder="At least 8 characters" value={authPassword} onChange={e=>setAuthPassword(e.target.value)} required/><div className="modal-forgot"><button type="button" onClick={()=>{setAuthMode(null);setForgotPasswordOpen(true);}}>{t("Forgot password?")}</button></div><button className="primary-btn full-btn" disabled={loading}>{loading?t("Please wait..."):t("Sign in")}<ArrowRight size={17}/></button></form><div className="modal-switch">{t("New to NexaTrade?")} <button onClick={()=>setAuthMode("register")}>{t("Create account")}</button></div><div className="modal-security"><LockKeyhole size={14}/> {t("Your account is secured with encrypted credentials")}</div></div></div>}
+    {authMode==="login" && <div className="modal-overlay" onMouseDown={e=>{if(e.target===e.currentTarget)setAuthMode(null);}}><div className="auth-modal"><button className="modal-close" onClick={()=>setAuthMode(null)} aria-label="Close"><X size={20}/></button><div className="modal-brand"><div className="brand-icon"><Activity size={23} strokeWidth={3}/></div>Ava<span>Trades</span></div><h2>{t("Welcome back")}</h2><p>{t("Sign in to pick up right where you left off.")}</p><form onSubmit={authenticate}><label className="input-label">{t("Email or username")}</label><input className="text-input" placeholder="you@example.com or username" value={authIdentifier} onChange={e=>setAuthIdentifier(e.target.value)} required/><label className="input-label">{t("Password")}</label><input className="text-input" type="password" placeholder="At least 8 characters" value={authPassword} onChange={e=>setAuthPassword(e.target.value)} required/><div className="modal-forgot"><button type="button" onClick={()=>{setAuthMode(null);setForgotPasswordOpen(true);}}>{t("Forgot password?")}</button></div><button className="primary-btn full-btn" disabled={loading}>{loading?t("Please wait..."):t("Sign in")}<ArrowRight size={17}/></button></form><div className="modal-switch">{t("New to AvaTrades?")} <button onClick={()=>setAuthMode("register")}>{t("Create account")}</button></div><div className="modal-security"><LockKeyhole size={14}/> {t("Your account is secured with encrypted credentials")}</div></div></div>}
     {authMode==="register" && <RegisterModal onClose={()=>setAuthMode(null)} onSwitchToLogin={()=>setAuthMode("login")} onRegistered={handleRegistered}/>}
     {forgotPasswordOpen && <ForgotPasswordModal onClose={()=>setForgotPasswordOpen(false)} onSwitchToLogin={()=>{setForgotPasswordOpen(false);setAuthMode("login");}}/>}
     {demoGateOpen && <div className="modal-overlay" onMouseDown={e=>{if(e.target===e.currentTarget)setDemoGateOpen(false);}}><div className="demo-gate-modal"><button className="modal-close" onClick={()=>setDemoGateOpen(false)} aria-label="Close"><X size={20}/></button><div className="demo-gate-icon"><UserRound size={24}/></div><h2>{t("Create a free account to continue")}</h2><p>{t("Your demo trades, deposits, and subscriptions won't be saved until you create a free account.")}</p><div className="demo-gate-actions"><button className="primary-btn" onClick={() => { setDemoGateOpen(false); setAuthMode("register"); }}>{t("Sign up free")} <ArrowRight size={16}/></button><button className="outline-btn" onClick={() => { setDemoGateOpen(false); setAuthMode("login"); }}>{t("Sign in")}</button><button className="outline-btn" onClick={() => setDemoGateOpen(false)}>{t("Keep exploring")}</button></div></div></div>}

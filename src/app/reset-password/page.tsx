@@ -39,7 +39,7 @@ function ResetPasswordForm() {
 
   return (
     <div className="auth-modal" style={{ margin: "0 auto" }}>
-      <div className="modal-brand"><div className="brand-icon"><KeyRound size={20} strokeWidth={3} /></div>Nexa<span>Trade</span></div>
+      <div className="modal-brand"><div className="brand-icon"><KeyRound size={20} strokeWidth={3} /></div>Ava<span>Trades</span></div>
       {!done ? <>
         <h2>Reset your password</h2>
         <p>{token ? "Choose a new password for your account." : "This link is missing its reset token. Make sure you opened the full link from your email, or request a new one from the sign-in page."}</p>
@@ -54,7 +54,7 @@ function ResetPasswordForm() {
       </> : <>
         <h2>Password updated</h2>
         <p>Your password has been reset. You can now close this tab and sign in with your new password.</p>
-        <Link className="primary-btn full-btn" href="/" style={{ textDecoration: "none", display: "flex", alignItems: "center", justifyContent: "center", gap: 8 }}><Check size={17} /> Go to NexaTrade</Link>
+        <Link className="primary-btn full-btn" href="/" style={{ textDecoration: "none", display: "flex", alignItems: "center", justifyContent: "center", gap: 8 }}><Check size={17} /> Go to AvaTrades</Link>
       </>}
       <div className="modal-security"><LockKeyhole size={14} /> Your account is secured with encrypted credentials</div>
     </div>

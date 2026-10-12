@@ -161,7 +161,7 @@ export async function PATCH(request: NextRequest) {
         userId: user.id,
         type: "password_changed",
         title: "Your password was changed",
-        message: "Your NexaTrade password was just changed. If you didn't make this change, contact support immediately.",
+        message: "Your AvaTrades password was just changed. If you didn't make this change, contact support immediately.",
       });
       return NextResponse.json({ success: true });
     }
@@ -178,7 +178,7 @@ export async function PATCH(request: NextRequest) {
         userId: user.id,
         type: "security_question_updated",
         title: "Security question updated",
-        message: "Your NexaTrade account recovery question was just updated. If you didn't make this change, contact support immediately.",
+        message: "Your AvaTrades account recovery question was just updated. If you didn't make this change, contact support immediately.",
       });
       return NextResponse.json({ success: true });
     }

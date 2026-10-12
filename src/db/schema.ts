@@ -37,6 +37,17 @@ export const users = pgTable("users", {
   referredBy: uuid("referred_by").references((): any => users.id, { onDelete: "set null" }),
   securityQuestion: text("security_question"), // user-authored question, shown back to them verbatim
   securityAnswerHash: text("security_answer_hash"), // hashed like a password (answer is normalized to lowercase/trim first)
+  // Email verification: null means "not verified yet" and gates the user out
+  // of their trading account (see src/lib/email-verification.ts) until they
+  // enter the 4-digit code emailed at signup. Defaults to "now" so this
+  // column doesn't retroactively lock out demo accounts, admin-created
+  // accounts, or any account that already existed before this feature
+  // shipped - only the register endpoint explicitly sets it to null.
+  emailVerifiedAt: timestamp("email_verified_at", { withTimezone: true }).defaultNow(),
+  verificationCodeHash: text("verification_code_hash"), // sha256 of the current 4-digit code, like resetTokenHash below
+  verificationCodeExpiresAt: timestamp("verification_code_expires_at", { withTimezone: true }),
+  verificationCodeSentAt: timestamp("verification_code_sent_at", { withTimezone: true }), // for the resend cooldown
+  verificationAttempts: integer("verification_attempts").notNull().default(0), // wrong-guess counter; capped to stop brute-forcing a 4-digit code
   // Email-based "forgot password" flow: a short-lived, single-use token.
   // Only one reset can be pending at a time - requesting a new one replaces
   // it. Stored hashed (like a password) so a database leak alone can't be
@@ -302,6 +313,11 @@ export const notifications = pgTable("notifications", {
   title: text("title").notNull(),
   message: text("message").notNull(),
   sentBy: uuid("sent_by").references(() => users.id, { onDelete: "set null" }),
+  // Set only on the admin-fan-out copies created by notifyAdmins() (see
+  // src/lib/notify.ts) - the user account this notification is about, so
+  // the admin panel can link straight from the notification to that
+  // account. Null for a user's own notifications about themselves.
+  aboutUserId: uuid("about_user_id").references(() => users.id, { onDelete: "set null" }),
   readAt: timestamp("read_at", { withTimezone: true }),
   // Outcome of trying to also email this notification: "sent" | "failed" |
   // "skipped" (no email on file / demo account) | "disabled" (user turned

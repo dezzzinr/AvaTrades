@@ -3,7 +3,7 @@ import { randomBytes } from "node:crypto";
 import { db } from "@/db";
 import { users, sessions, transactions } from "@/db/schema";
 import { eq, or, sql } from "drizzle-orm";
-import { checkPassword, clearSession, hashPassword, hashToken, isAdminEmail, setSession } from "@/lib/auth";
+import { checkPassword, clearSession, getUser, hashPassword, hashToken, isAdminEmail, setSession } from "@/lib/auth";
 import { calculateAge, isValidEmail, isValidUsername, MIN_SIGNUP_AGE, normalizeSecurityAnswer } from "@/lib/profile";
 import { ALLOWED_AVATAR_MIME_TYPES, MAX_AVATAR_BYTES } from "@/lib/profile";
 import { parseDataUrl } from "@/lib/deposits";
@@ -11,6 +11,7 @@ import { currencyForCountry, countryByCode } from "@/lib/countries";
 import { notifyUser } from "@/lib/notify";
 import { findReferrer, generateReferralCode, REFERRAL_BONUS_AMOUNT } from "@/lib/referrals";
 import { passwordResetEmailHtml, sendEmail } from "@/lib/email-server";
+import { issueVerificationCode, needsEmailVerification, VERIFICATION_MAX_ATTEMPTS, VERIFICATION_RESEND_COOLDOWN_MS } from "@/lib/email-verification";
 
 function bad(error: string, status = 400) {
   return NextResponse.json({ error }, { status });
@@ -34,10 +35,12 @@ export async function POST(request: NextRequest) {
     if (action === "register") {
       const name = String(body.name ?? "").trim();
       const email = String(body.email ?? "").trim().toLowerCase();
-      const username = String(body.username ?? "").trim().toLowerCase();
+      const usernameInput = String(body.username ?? "").trim().toLowerCase();
+      const username = usernameInput || null;
       const password = String(body.password ?? "");
       const confirmPassword = String(body.confirmPassword ?? "");
-      const dateOfBirth = String(body.dateOfBirth ?? "").trim();
+      const dateOfBirthInput = String(body.dateOfBirth ?? "").trim();
+      const dateOfBirth = dateOfBirthInput || null;
       const gender = body.gender ? String(body.gender).trim() : null;
       const country = String(body.country ?? "").trim().toUpperCase();
       const state = body.state ? String(body.state).trim() : null;
@@ -52,14 +55,21 @@ export async function POST(request: NextRequest) {
       const privacyAccepted = body.privacyAccepted === true;
 
       // --- Required-field validation -----------------------------------
+      // Registration only requires: full name, email, phone, country, and
+      // password. Everything else (username, date of birth, gender,
+      // address details, profile photo, security question, referral code)
+      // is optional at signup and can be filled in later from the Profile
+      // page - see src/components/profile-page.tsx.
       if (name.length < 2 || name.length > 80) return bad("Full name must be between 2 and 80 characters.");
       if (!isValidEmail(email)) return bad("Enter a valid email address.");
-      if (!isValidUsername(username)) return bad("Username must be 3-24 characters and contain only letters, numbers, underscores, or periods.");
+      if (username && !isValidUsername(username)) return bad("Username must be 3-24 characters and contain only letters, numbers, underscores, or periods.");
       if (password.length < 8) return bad("Password must be at least 8 characters.");
       if (password !== confirmPassword) return bad("Password and confirm password do not match.");
-      if (!dateOfBirth || Number.isNaN(Date.parse(dateOfBirth))) return bad("Enter a valid date of birth.");
-      const age = calculateAge(dateOfBirth);
-      if (age === null || age < MIN_SIGNUP_AGE) return bad(`You must be at least ${MIN_SIGNUP_AGE} years old to create an account.`);
+      if (dateOfBirth) {
+        if (Number.isNaN(Date.parse(dateOfBirth))) return bad("Enter a valid date of birth.");
+        const age = calculateAge(dateOfBirth);
+        if (age === null || age < MIN_SIGNUP_AGE) return bad(`You must be at least ${MIN_SIGNUP_AGE} years old to create an account.`);
+      }
       if (!countryByCode(country)) return bad("Select a valid country.");
       if (!phone || phone.length < 5 || phone.length > 25) return bad("Enter a valid phone number.");
       if (!termsAccepted) return bad("You must agree to the Terms & Conditions.");
@@ -79,8 +89,10 @@ export async function POST(request: NextRequest) {
 
       const [existingEmail] = await db.select({ id: users.id }).from(users).where(eq(users.email, email)).limit(1);
       if (existingEmail) return bad("An account with this email already exists.", 409);
-      const [existingUsername] = await db.select({ id: users.id }).from(users).where(eq(sql`lower(${users.username})`, username)).limit(1);
-      if (existingUsername) return bad("That username is already taken.", 409);
+      if (username) {
+        const [existingUsername] = await db.select({ id: users.id }).from(users).where(eq(sql`lower(${users.username})`, username)).limit(1);
+        if (existingUsername) return bad("That username is already taken.", 409);
+      }
 
       const now = new Date();
       const referrer = enteredReferralCode ? await findReferrer(enteredReferralCode) : null;
@@ -107,7 +119,10 @@ export async function POST(request: NextRequest) {
         termsAcceptedAt: now,
         privacyAcceptedAt: now,
         currency: currencyForCountry(country),
+        emailVerifiedAt: null, // gates this account behind the email-verification screen until the 4-digit code is entered
       }).returning();
+
+      await issueVerificationCode(user as { id: string; name: string; email: string });
 
       if (referrer) {
         // One-time bonus to both sides, paid from nowhere (paper money) -
@@ -125,14 +140,14 @@ export async function POST(request: NextRequest) {
           userId: referrer.id,
           type: "referral_bonus",
           title: "Your referral just signed up!",
-          message: `${name} created a NexaTrade account using your referral code. You've both been credited $${REFERRAL_BONUS_AMOUNT.toFixed(2)}.`,
+          message: `${name} created a AvaTrades account using your referral code. You've both been credited $${REFERRAL_BONUS_AMOUNT.toFixed(2)}.`,
         });
       }
 
       await notifyUser({
         userId: user.id,
         type: "account_created",
-        title: "Welcome to NexaTrade!",
+        title: "Welcome to AvaTrades!",
         message: referrer
           ? `Your account is ready with a $${REFERRAL_BONUS_AMOUNT.toFixed(2)} referral bonus for signing up with ${referrer.name}'s code already credited to your balance. Make a deposit to add more paper trading funds, then explore the markets, place your first trade, or check out the trading bots and copy trading catalog.`
           : "Your account is ready with a $0.00 balance. Head to Deposit to add paper trading funds, then explore the markets, place your first trade, or check out the trading bots and copy trading catalog whenever you're ready.",
@@ -154,9 +169,49 @@ export async function POST(request: NextRequest) {
         userId: user.id,
         type: "login",
         title: "New sign-in to your account",
-        message: `We noticed a new sign-in to your NexaTrade account on ${new Date().toLocaleString("en-US", { dateStyle: "medium", timeStyle: "short" })}${ip ? ` from ${ip}` : ""}. If this wasn't you, change your password right away from Profile → Security.`,
+        message: `We noticed a new sign-in to your AvaTrades account on ${new Date().toLocaleString("en-US", { dateStyle: "medium", timeStyle: "short" })}${ip ? ` from ${ip}` : ""}. If this wasn't you, change your password right away from Profile → Security.`,
       });
       return await setSession(NextResponse.json({ success: true }), user.id);
+    }
+
+    // --- Email verification (4-digit code sent at registration) ----------
+    if (action === "verifyEmail") {
+      const user = await getUser(request);
+      if (!user) return bad("Session expired. Please sign in again.", 401);
+      if (!needsEmailVerification(user)) return NextResponse.json({ success: true, alreadyVerified: true });
+      const code = String(body.code ?? "").trim();
+      if (!/^\d{4}$/.test(code)) return bad("Enter the 4-digit code from your email.");
+      if (!user.verificationCodeHash || !user.verificationCodeExpiresAt || user.verificationCodeExpiresAt.getTime() < Date.now()) {
+        return bad("This code has expired. Request a new one.");
+      }
+      if (user.verificationAttempts >= VERIFICATION_MAX_ATTEMPTS) {
+        return bad("Too many incorrect attempts. Request a new code.");
+      }
+      if (hashToken(code) !== user.verificationCodeHash) {
+        await db.update(users).set({ verificationAttempts: sql`${users.verificationAttempts} + 1` }).where(eq(users.id, user.id));
+        const left = VERIFICATION_MAX_ATTEMPTS - (user.verificationAttempts + 1);
+        return bad(left > 0 ? `Incorrect code. ${left} attempt${left === 1 ? "" : "s"} left.` : "Too many incorrect attempts. Request a new code.");
+      }
+      await db.update(users).set({ emailVerifiedAt: new Date(), verificationCodeHash: null, verificationCodeExpiresAt: null, verificationAttempts: 0 }).where(eq(users.id, user.id));
+      await notifyUser({
+        userId: user.id,
+        type: "email_verified",
+        title: "Email verified",
+        message: "Your email has been verified - you now have full access to your AvaTrades account.",
+      });
+      return NextResponse.json({ success: true });
+    }
+    if (action === "resendVerificationCode") {
+      const user = await getUser(request);
+      if (!user) return bad("Session expired. Please sign in again.", 401);
+      if (user.isDemo || !user.email) return bad("No email on file for this account.");
+      if (!needsEmailVerification(user)) return NextResponse.json({ success: true, alreadyVerified: true });
+      if (user.verificationCodeSentAt && Date.now() - user.verificationCodeSentAt.getTime() < VERIFICATION_RESEND_COOLDOWN_MS) {
+        const waitSec = Math.ceil((VERIFICATION_RESEND_COOLDOWN_MS - (Date.now() - user.verificationCodeSentAt.getTime())) / 1000);
+        return bad(`Please wait ${waitSec}s before requesting another code.`);
+      }
+      await issueVerificationCode(user as { id: string; name: string; email: string });
+      return NextResponse.json({ success: true, message: "A new code has been sent to your email." });
     }
 
     // --- Forgot password, via the user-authored security question --------
@@ -187,7 +242,7 @@ export async function POST(request: NextRequest) {
         userId: user.id,
         type: "password_changed",
         title: "Your password was reset",
-        message: "Your NexaTrade password was just reset using your security question. If you didn't do this, contact support immediately.",
+        message: "Your AvaTrades password was just reset using your security question. If you didn't do this, contact support immediately.",
       });
       return NextResponse.json({ success: true });
     }
@@ -205,7 +260,7 @@ export async function POST(request: NextRequest) {
       const token = randomBytes(32).toString("hex");
       await db.update(users).set({ resetTokenHash: hashToken(token), resetTokenExpiresAt: new Date(Date.now() + 30 * 60 * 1000) }).where(eq(users.id, user.id));
       const { html, text } = passwordResetEmailHtml({ name: user.name, token });
-      const result = await sendEmail({ to: user.email, subject: "Reset your NexaTrade password", html, text });
+      const result = await sendEmail({ to: user.email, subject: "Reset your AvaTrades password", html, text });
       if (result.status === "stubbed") console.log(`[password-reset:stub] token for ${user.email}: ${token}`);
       return genericOk;
     }
@@ -225,7 +280,7 @@ export async function POST(request: NextRequest) {
         userId: user.id,
         type: "password_changed",
         title: "Your password was reset",
-        message: "Your NexaTrade password was just reset using the emailed reset link. If you didn't do this, contact support immediately.",
+        message: "Your AvaTrades password was just reset using the emailed reset link. If you didn't do this, contact support immediately.",
       });
       return NextResponse.json({ success: true });
     }

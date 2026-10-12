@@ -1,7 +1,8 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { Activity, AlertTriangle, ArrowDownLeft, ArrowLeft, ArrowLeftRight, ArrowRight, ArrowUpRight, Bell, Bot, Check, ChevronDown, ChevronRight, Clock3, Copy as CopyIcon, CreditCard, History, LayoutDashboard, LockKeyhole, Menu, Moon, Pencil, Plus, RefreshCw, Search, Send, ShieldAlert, ShieldCheck, Sparkles, Sun, Trash2, TrendingUp, UserPlus, UserRound, UsersRound, Wallet, X } from "lucide-react";
+import { Activity, AlertTriangle, ArrowDownLeft, ArrowLeft, ArrowLeftRight, ArrowRight, ArrowUpRight, Bell, Bot, Check, ChevronDown, ChevronLeft, ChevronRight, Clock3, Copy as CopyIcon, CreditCard, History, LayoutDashboard, LockKeyhole, Menu, Moon, Pencil, Plus, RefreshCw, Search, Send, ShieldAlert, ShieldCheck, Sparkles, Sun, Trash2, TrendingUp, UserPlus, UserRound, UsersRound, Wallet, X } from "lucide-react";
+import { notificationVisual, timeAgo } from "@/lib/notification-visual";
 import { DEPOSIT_METHODS, depositMethodLabel, type DepositMethod } from "@/lib/deposits";
 import { withdrawalMethodLabel } from "@/lib/withdrawals";
 import { AVATAR_COLORS, RISK_LEVELS, SUBSCRIPTION_DURATION_OPTIONS, type AvatarColor, type RiskLevel } from "@/lib/copy-trading";
@@ -13,6 +14,7 @@ import { ConfirmProvider, useConfirm } from "@/components/confirm-provider";
 import { ThemeProvider, useTheme } from "@/components/theme-provider";
 
 type AdminUser = { id: string; name: string; email: string | null };
+type Notification = { id: string; type?: string; title: string; message: string; readAt: string | null; createdAt: string; aboutUserId?: string | null };
 type DepositRequestRow = {
   id: string; method: string; amount: string; destinationLabel: string | null; reference: string | null; note: string | null;
   status: string; adminNote: string | null; receiptFilename: string; receiptMimeType: string; createdAt: string; reviewedAt: string | null;
@@ -42,15 +44,16 @@ type UserDetail = {
 };
 type Overview = { totalUsers: number; totalCashBalance: string; totalProfitBalance: string; pendingDeposits: number; pendingWithdrawals: number; activeBotSubscriptions: number; activeCopySubscriptions: number; activePlanSubscriptions: number; restrictedAccounts: number };
 
-type Tab = "overview" | "users" | "deposits" | "withdrawals" | "accounts" | "traders" | "bots" | "plans" | "broadcast";
+type Tab = "overview" | "notifications" | "users" | "deposits" | "withdrawals" | "accounts" | "traders" | "bots" | "plans" | "broadcast";
 const navGroups: { label: string; items: { name: Tab; label: string; icon: typeof LayoutDashboard }[] }[] = [
-  { label: "OVERVIEW", items: [{ name: "overview", label: "Overview", icon: LayoutDashboard }] },
+  { label: "OVERVIEW", items: [{ name: "overview", label: "Overview", icon: LayoutDashboard }, { name: "notifications", label: "Notifications", icon: Bell }] },
   { label: "USERS", items: [{ name: "users", label: "Manage users", icon: UsersRound }, { name: "broadcast", label: "Broadcast message", icon: Send }] },
   { label: "PAYMENTS", items: [{ name: "deposits", label: "Deposit requests", icon: ArrowDownLeft }, { name: "withdrawals", label: "Withdrawal requests", icon: ArrowUpRight }, { name: "accounts", label: "Deposit destinations", icon: CreditCard }] },
   { label: "CATALOG", items: [{ name: "traders", label: "Copy traders", icon: CopyIcon }, { name: "bots", label: "Trading bots", icon: Bot }, { name: "plans", label: "Plans", icon: Sparkles }] },
 ];
 const tabTitles: Record<Tab, { title: string; description: string }> = {
   overview: { title: "Overview", description: "A quick snapshot of your platform's users, payments, and subscriptions." },
+  notifications: { title: "Notifications", description: "Every notable event across every user account, in one place." },
   users: { title: "Manage users", description: "View every account, edit profiles, change access, send notifications, place trades, and adjust balances." },
   deposits: { title: "Deposits & withdrawals", description: "Verify receipts submitted by users and credit their balance." },
   withdrawals: { title: "Deposits & withdrawals", description: "Review payout requests submitted by users." },
@@ -75,6 +78,72 @@ function AdminPageInner() {
   const [toast, setToast] = useState<{ text: string; error?: boolean } | null>(null);
   const notify = (text: string, error = false) => { setToast({ text, error }); setTimeout(() => setToast(null), 4500); };
   const go = (t: Tab) => { setTab(t); setMobileMenu(false); window.scrollTo({ top: 0, behavior: "smooth" }); };
+
+  // --- Notifications: every notable event across every user account (see
+  // notifyAdmins in src/lib/notify.ts), surfaced the same way the main app
+  // surfaces a user's own activity - a bell + popover everywhere, plus a
+  // dedicated paginated page here.
+  const [notificationsOpen, setNotificationsOpen] = useState(false);
+  const [recentNotifications, setRecentNotifications] = useState<Notification[]>([]);
+  const [unreadNotifications, setUnreadNotifications] = useState(0);
+  const [allNotifications, setAllNotifications] = useState<Notification[]>([]);
+  const [notifTotal, setNotifTotal] = useState(0);
+  const [notifOffset, setNotifOffset] = useState(0);
+  const [notifTypeFilter, setNotifTypeFilter] = useState("");
+  const [notifLoading, setNotifLoading] = useState(false);
+  const NOTIF_PAGE_SIZE = 20;
+  const loadNotifSummary = async () => {
+    try {
+      const res = await fetch("/api/notifications?limit=8", { cache: "no-store" });
+      if (!res.ok) return;
+      const result = await res.json();
+      setRecentNotifications(result.notifications ?? []);
+      setUnreadNotifications(result.unread ?? 0);
+    } catch { /* ignore - the bell just won't update this cycle */ }
+  };
+  useEffect(() => {
+    if (authState !== "ok") return;
+    void loadNotifSummary();
+    const id = window.setInterval(() => void loadNotifSummary(), 30000);
+    return () => window.clearInterval(id);
+  }, [authState]);
+  const toggleNotifications = () => {
+    const opening = !notificationsOpen;
+    setNotificationsOpen(opening);
+    if (opening && unreadNotifications > 0) { fetch("/api/notifications", { method: "POST" }).then(() => loadNotifSummary()).catch(() => {}); }
+  };
+  const loadAllNotifications = async (offset: number, type: string) => {
+    setNotifLoading(true);
+    try {
+      const params = new URLSearchParams({ limit: String(NOTIF_PAGE_SIZE), offset: String(offset) });
+      if (type) params.set("type", type);
+      const res = await fetch(`/api/notifications?${params.toString()}`, { cache: "no-store" });
+      if (!res.ok) return;
+      const result = await res.json();
+      setAllNotifications(result.notifications ?? []);
+      setNotifTotal(result.total ?? 0);
+      setNotifOffset(offset);
+    } catch { /* ignore */ } finally { setNotifLoading(false); }
+  };
+  useEffect(() => {
+    if (authState === "ok" && tab === "notifications") {
+      void loadAllNotifications(0, notifTypeFilter);
+      if (unreadNotifications > 0) fetch("/api/notifications", { method: "POST" }).then(() => loadNotifSummary()).catch(() => {});
+    }
+  }, [authState, tab]);
+  const markOneNotificationRead = async (id: string) => {
+    try { await fetch(`/api/notifications/${id}`, { method: "PATCH" }); } catch { /* ignore */ }
+    setAllNotifications((rows) => rows.map((n) => n.id === id ? { ...n, readAt: n.readAt ?? new Date().toISOString() } : n));
+    void loadNotifSummary();
+  };
+  const markAllNotificationsRead = async () => {
+    if (!(await confirm({ title: "Mark all notifications as read?" }))) return;
+    await fetch("/api/notifications", { method: "POST" });
+    void loadNotifSummary();
+    void loadAllNotifications(0, notifTypeFilter);
+  };
+  // Jump from a notification straight to the account it's about.
+  const viewAccountFromNotification = (userId: string) => { setNotificationsOpen(false); setTab("users"); openUser(userId); };
 
   const [statusFilter, setStatusFilter] = useState<"pending" | "approved" | "rejected" | "all">("pending");
   const [requests, setRequests] = useState<DepositRequestRow[]>([]);
@@ -665,7 +734,7 @@ function AdminPageInner() {
       <LockKeyhole size={28}/>
       <h2>Admins only</h2>
       <p>You need an admin account to view this page. Sign in with an admin account on the main app, then come back here.</p>
-      <a className="primary-btn" href="/"><ArrowLeft size={16}/> Back to NexaTrade</a>
+      <a className="primary-btn" href="/"><ArrowLeft size={16}/> Back to AvaTrades</a>
     </div>
   </div>;
 
@@ -674,17 +743,29 @@ function AdminPageInner() {
   return <div className="admin-shell">
     {mobileMenu && <div className="mobile-overlay" onClick={() => setMobileMenu(false)}/>}
     <aside className={`sidebar ${mobileMenu ? "sidebar-open" : ""}`}>
-      <div className="brand" onClick={() => go("overview")}><div className="brand-icon"><Activity size={23} strokeWidth={3}/></div><span>Nexa<span>Trade</span></span><button className="mobile-close" onClick={(e) => { e.stopPropagation(); setMobileMenu(false); }}><X size={19}/></button></div>
+      <div className="brand" onClick={() => go("overview")}><div className="brand-icon"><Activity size={23} strokeWidth={3}/></div><span>Ava<span>Trades</span></span><button className="mobile-close" onClick={(e) => { e.stopPropagation(); setMobileMenu(false); }}><X size={19}/></button></div>
       <div className="sidebar-body">{navGroups.map(group => <div className="nav-group" key={group.label}><div className="nav-label">{group.label}</div>{group.items.map(item => { const Icon = item.icon; return <button key={item.name} className={`nav-item ${tab === item.name ? "selected" : ""}`} onClick={() => go(item.name)}><Icon size={19} strokeWidth={tab === item.name ? 2.25 : 1.8}/><span>{item.label}</span></button>; })}</div>)}</div>
       <div className="sidebar-bottom">
         <div className="help-card"><span className="help-bubble"><ShieldCheck size={18}/></span><strong>{admin?.name}</strong><p>{admin?.email ?? "Signed in as admin"}</p><a href="/" style={{ display: "flex", alignItems: "center", gap: 5, textDecoration: "none" }}>Exit to app <ArrowRight size={14}/></a></div>
-        <div className="sidebar-footer"><ShieldCheck size={15}/> NexaTrade admin panel</div>
+        <div className="sidebar-footer"><ShieldCheck size={15}/> AvaTrades admin panel</div>
       </div>
     </aside>
     <div className="main-shell">
       <header className="topbar">
         <div className="topbar-left"><button className="icon-btn menu-btn" onClick={() => setMobileMenu(true)} aria-label="Open menu"><Menu size={22}/></button><div className="breadcrumb">Admin <ChevronRight size={15}/> <strong>{active.title}</strong></div></div>
-        <div className="topbar-right"><button className="theme-toggle" aria-label={theme === "dark" ? "Switch to light mode" : "Switch to dark mode"} title={theme === "dark" ? "Switch to light mode" : "Switch to dark mode"} onClick={toggleTheme}>{theme === "dark" ? <Sun size={19}/> : <Moon size={19}/>}</button><span className="admin-whoami"><ShieldCheck size={15}/> {admin?.name} · Admin</span><a href="/" className="outline-btn small"><ArrowLeft size={14}/> Exit to app</a></div>
+        <div className="topbar-right">
+          <div className="notification-wrap">
+            <button className="icon-btn notif-btn" aria-label="Notifications" onClick={toggleNotifications}><Bell size={20}/>{unreadNotifications > 0 && <i/>}</button>
+            {notificationsOpen && <div className="popover notification-popover">
+              <div className="popover-title">Notifications {unreadNotifications > 0 && <span>{unreadNotifications} new</span>}</div>
+              {recentNotifications.length === 0 ? <div className="notification-empty"><Bell size={18}/><p>No notifications yet</p></div> : recentNotifications.map(n => { const { Icon, color } = notificationVisual(n.type); return <div className={`notification-item ${n.readAt ? "" : "unread"}`} key={n.id}>
+                <span className={`notification-icon ${color}`}><Icon size={16}/></span>
+                <div><strong>{n.title}</strong><p>{n.message}</p><small>{timeAgo(n.createdAt)}</small>{n.aboutUserId && <button className="notification-view-account" onClick={() => viewAccountFromNotification(n.aboutUserId!)}><UserRound size={11}/> View account</button>}</div>
+              </div>; })}
+              <button className="notification-see-all" onClick={() => { setNotificationsOpen(false); setTab("notifications"); }}>See all notifications <ArrowRight size={13}/></button>
+            </div>}
+          </div>
+          <button className="theme-toggle" aria-label={theme === "dark" ? "Switch to light mode" : "Switch to dark mode"} title={theme === "dark" ? "Switch to light mode" : "Switch to dark mode"} onClick={toggleTheme}>{theme === "dark" ? <Sun size={19}/> : <Moon size={19}/>}</button><span className="admin-whoami"><ShieldCheck size={15}/> {admin?.name} · Admin</span><a href="/" className="outline-btn small"><ArrowLeft size={14}/> Exit to app</a></div>
       </header>
       <main className="admin-content">
         <div className="page-heading"><div><div className="eyebrow">ADMIN PANEL</div><h1>{active.title}</h1><p>{active.description}</p></div></div>
@@ -714,6 +795,46 @@ function AdminPageInner() {
             </div>
           </section>
         </>}
+
+        {tab === "notifications" && (() => {
+          const notifFilterOptions: { label: string; value: string }[] = [
+            { label: "All", value: "" },
+            { label: "New accounts", value: "account_created" },
+            { label: "Logins", value: "login" },
+            { label: "Trading", value: "trade_placed" },
+            { label: "Orders", value: "order_filled" },
+            { label: "Positions", value: "position_auto_closed" },
+            { label: "Deposits", value: "deposit_submitted" },
+            { label: "Withdrawals", value: "withdrawal_submitted" },
+            { label: "Subscriptions", value: "bot_subscribed" },
+            { label: "Security", value: "password_changed" },
+            { label: "Admin actions", value: "admin_message" },
+          ];
+          const page1 = notifOffset + 1;
+          const pageCount = Math.max(Math.ceil(notifTotal / NOTIF_PAGE_SIZE), 1);
+          const currentPageNum = Math.floor(notifOffset / NOTIF_PAGE_SIZE) + 1;
+          return <section className="panel">
+            <div className="section-head"><div><h2>All notifications</h2><p>{notifTotal} total · every notable event across every user account</p></div>
+              <div style={{ display: "flex", gap: 10, alignItems: "center" }}>
+                {unreadNotifications > 0 && <button className="outline-btn small" onClick={() => void markAllNotificationsRead()}><Check size={14}/> Mark all read</button>}
+                <div className="select-wrap" style={{ height: 37 }}><select value={notifTypeFilter} onChange={(e) => { setNotifTypeFilter(e.target.value); void loadAllNotifications(0, e.target.value); }}>{notifFilterOptions.map(o => <option key={o.value} value={o.value}>{o.label}</option>)}</select></div>
+              </div>
+            </div>
+            {notifLoading ? <div className="no-results">Loading notifications...</div> : allNotifications.length === 0 ? <div className="empty-state"><span className="empty-icon"><Bell size={27}/></span><h3>No notifications</h3><p>Activity across every user account will show up here.</p></div> : <>
+              <div className="notifications-page-list">{allNotifications.map(n => { const { Icon, color } = notificationVisual(n.type); return <div className={`notification-item ${n.readAt ? "" : "unread"}`} key={n.id} onClick={() => !n.readAt && markOneNotificationRead(n.id)} style={{ cursor: n.readAt ? "default" : "pointer" }}>
+                <span className={`notification-icon ${color}`}><Icon size={16}/></span>
+                <div><strong>{n.title}</strong><p>{n.message}</p><small>{new Date(n.createdAt).toLocaleString("en-US", { month: "short", day: "numeric", year: "numeric", hour: "numeric", minute: "2-digit" })}</small>
+                  {n.aboutUserId && <button className="notification-view-account" onClick={(e) => { e.stopPropagation(); viewAccountFromNotification(n.aboutUserId!); }}><UserRound size={11}/> View account</button>}
+                </div>
+              </div>; })}</div>
+              <div className="notifications-pagination">
+                <button className="outline-btn small" disabled={page1 <= 1} onClick={() => loadAllNotifications(Math.max(notifOffset - NOTIF_PAGE_SIZE, 0), notifTypeFilter)}><ChevronLeft size={14}/> Previous</button>
+                <span>Page {currentPageNum} of {pageCount}</span>
+                <button className="outline-btn small" disabled={notifOffset + NOTIF_PAGE_SIZE >= notifTotal} onClick={() => loadAllNotifications(notifOffset + NOTIF_PAGE_SIZE, notifTypeFilter)}>Next <ChevronRight size={14}/></button>
+              </div>
+            </>}
+          </section>;
+        })()}
 
         {tab === "users" && !selectedUserId && <>
           <div className="admin-filter-row" style={{ marginBottom: 16, justifyContent: "space-between" }}>

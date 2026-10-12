@@ -1,6 +1,6 @@
 # Applying this update: 8 new features, confirm-before-acting, and $0 starting balance
 
-This zip contains the full NexaTrade project with **8 new features**, a global **confirmation dialog before mutating actions**, and a change to **new accounts starting at $0**, all added on top of everything delivered previously (trading overhaul, user profiles/registration, region-based currency, language selector, demo-account gating, the in-app + email notification system). Since I don't have push access to your GitHub repo, apply it manually:
+This zip contains the full AvaTrades project with **8 new features**, a global **confirmation dialog before mutating actions**, and a change to **new accounts starting at $0**, all added on top of everything delivered previously (trading overhaul, user profiles/registration, region-based currency, language selector, demo-account gating, the in-app + email notification system). Since I don't have push access to your GitHub repo, apply it manually:
 
 1. **Price alerts** — "notify me when BTC goes above/below $X"
 2. **Email-based password reset** — alongside the existing security-question flow

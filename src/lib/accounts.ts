@@ -1,8 +1,23 @@
 // Shared constants/helpers for admin-controlled account standing. Statuses
 // are set by admins under Admin panel -> Users and enforced server-side on
 // every mutating request so they can't be bypassed from the client.
+//
+// Kept dependency-free (no db/crypto imports) on purpose: this module is
+// also imported from client components (e.g. src/app/admin/page.tsx), so
+// anything here must be safe to bundle for the browser.
 
 export const ACCOUNT_STATUSES = ["active", "limited", "suspended", "locked"] as const;
+
+// True when this account still needs to complete email verification before
+// it can do anything beyond viewing its (empty) dashboard. Demo accounts and
+// accounts with no email on file (shouldn't normally happen, but be safe)
+// are exempt - there's nothing to verify. Re-exported from
+// src/lib/email-verification.ts, which owns the rest of the
+// verification-code flow (that module needs db access, so it can't be
+// imported here - see note above).
+export function needsEmailVerification(user: { isDemo?: boolean; email?: string | null; emailVerifiedAt?: Date | string | null }): boolean {
+  return !user.isDemo && !!user.email && !user.emailVerifiedAt;
+}
 export type AccountStatus = (typeof ACCOUNT_STATUSES)[number];
 
 export function accountStatusLabel(status: string) {
@@ -19,6 +34,8 @@ type StatusFields = {
   maxTradeAmount: string | number | null;
   withdrawalsBlocked: boolean;
   isDemo?: boolean;
+  email?: string | null;
+  emailVerifiedAt?: Date | string | null;
 };
 
 // Call before any mutating action (trade, deposit, withdrawal, subscribe,
@@ -32,6 +49,12 @@ export function blockedActionMessage(user: StatusFields, kind: "trade" | "deposi
   // before even attempting the request.
   if (user.isDemo) {
     return "Create a free account to continue - sign up (it's free) to save your trades, deposits, and subscriptions for good.";
+  }
+  // A freshly registered account can't do anything until its email is
+  // verified (client shows a dedicated code-entry gate for this - this is
+  // the server-side backstop so the gate can't be bypassed).
+  if (needsEmailVerification(user)) {
+    return "Verify your email to continue - enter the 4-digit code we sent you (or resend it from the verification screen).";
   }
   const status = user.accountStatus ?? "active";
   if (status === "locked" || status === "suspended") {

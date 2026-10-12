@@ -1,4 +1,4 @@
-# NexaTrade
+# AvaTrades
 
 A crypto paper-trading web app built with Next.js App Router, Drizzle ORM, and PostgreSQL. Visitors can explore immediately in a seeded demo workspace or create an account with their own persistent simulation balance.
 
@@ -38,9 +38,9 @@ The app and Drizzle both read the same `DATABASE_URL`; no credentials are embedd
    ```bash
    git init
    git add .
-   git commit -m "Deploy NexaTrade"
+   git commit -m "Deploy AvaTrades"
    git branch -M main
-   git remote add origin https://github.com/YOUR_USERNAME/nexatrade.git
+   git remote add origin https://github.com/YOUR_USERNAME/avatrades.git
    git push -u origin main
    ```
 
@@ -52,7 +52,7 @@ Future pushes to `main` automatically deploy through Vercel. If you change the s
 
 ## Live market data
 
-NexaTrade reads USD spot market prices, 24-hour and 7-day changes, 7-day sparklines, coin artwork, volumes, market caps, and 24-hour high/low from the [CoinGecko API](https://www.coingecko.com/en/api). The 24H, 7D, 30D, and 1Y charts use CoinGecko historical prices. The browser refreshes the market snapshot every 60 seconds; the server caches provider responses to limit API usage. **Prices are indicative, not an exchange order book or tick-by-tick streaming feed.**
+AvaTrades reads USD spot market prices, 24-hour and 7-day changes, 7-day sparklines, coin artwork, volumes, market caps, and 24-hour high/low from the [CoinGecko API](https://www.coingecko.com/en/api). The 24H, 7D, 30D, and 1Y charts use CoinGecko historical prices. The browser refreshes the market snapshot every 60 seconds; the server caches provider responses to limit API usage. **Prices are indicative, not an exchange order book or tick-by-tick streaming feed.**
 
 Keyless access may work for local evaluation but is rate-limited by shared IP. For deployment, create a free **Demo API key** in the [CoinGecko Developer Dashboard](https://www.coingecko.com/en/developers/dashboard) and set `COINGECKO_API_KEY` in your local `.env` and in Vercel's environment variables. This is read **only on the server** and sent as the `x-cg-demo-api-key` header. Paid Pro keys can instead be provided as `COINGECKO_PRO_API_KEY`; the app uses the appropriate Pro host and header. Do not expose a key using `NEXT_PUBLIC_`.
 
@@ -75,7 +75,7 @@ The current market snapshot is available at `/api/market`; chart data at `/api/m
 - In-app + email notifications for every notable account/trading event, plus a dedicated paginated/filterable Notifications page (see below)
 - Price alerts ("notify me when BTC crosses $X"), a starred-assets watchlist, CSV export on transaction/trade history tables, and search/filter on history tables (see below)
 - Email-based password reset (alongside the existing security-question flow), and a referral program with auto-generated shareable codes and a signup bonus for both sides (see below)
-- Responsive interface using the NexaTrade blue theme, including a fully mobile-responsive admin panel (sidebar on desktop, hamburger menu on mobile — same pattern as the main dashboard)
+- Responsive interface using the AvaTrades blue theme, including a fully mobile-responsive admin panel (sidebar on desktop, hamburger menu on mobile — same pattern as the main dashboard)
 
 **Simulation notice:** Market prices are real provider quotes, but there is no live exchange execution, autonomous bot execution, or automatic trade copying — subscribing to a trading bot or copy trader grants access to configure it / view their published stats for 7 days, it does not execute real trades or mirror real trades. Plan subscriptions are a simulated billing flow and do not enable any live exchange connectivity. Deposits and withdrawals model a real-world manual payment flow — see below.
 
@@ -95,7 +95,7 @@ The **Trade** page simulates a real exchange's order ticket instead of a single 
 Deposits are **not instant and not automatic**. The flow is designed for a business that collects payments outside the app (crypto wallets, bank transfers, PayPal, Cash App, gift cards) and credits balances manually after verifying proof of payment:
 
 1. An admin configures one or more **destination accounts** per method (e.g. a BTC address, a bank account, a PayPal email, a $Cashtag, gift-card instructions) under **Admin panel → Deposit destinations** (`/admin`).
-2. A user opens **Deposit**, picks a method, sees the destination to pay into, sends funds *outside* NexaTrade through their own banking/wallet/PayPal/etc., then submits an amount, optional reference, optional note, and a **receipt** (screenshot/photo/PDF, up to 3MB) through the app.
+2. A user opens **Deposit**, picks a method, sees the destination to pay into, sends funds *outside* AvaTrades through their own banking/wallet/PayPal/etc., then submits an amount, optional reference, optional note, and a **receipt** (screenshot/photo/PDF, up to 3MB) through the app.
 3. The request is stored as `pending` and the user's balance is **untouched**. It shows up for the user under "Your deposit requests" and for admins under **Admin panel → Deposit requests**.
 4. An admin opens the receipt, then **Approves** (credits the claimed amount to the user's balance and logs a transaction) or **Rejects** (with a required reason shown to the user). Each request can only be reviewed once.
 
@@ -220,12 +220,12 @@ Every notable account/trading event - account created, sign-in, password/securit
 ### New environment variables
 
 - `RESEND_API_KEY` (optional) - get a free key at [resend.com](https://resend.com/api-keys). Omit it to keep emails stubbed/logged only.
-- `EMAIL_FROM` (optional) - defaults to `NexaTrade <onboarding@resend.dev>`. On Resend's free tier (no verified domain) this must stay as `onboarding@resend.dev`, and mail can only be received at the address you signed up to Resend with; verify a custom domain in Resend for real multi-user delivery.
-- `APP_URL` (optional) - your deployed URL, used only to build the "Open NexaTrade" button in emails (and the clickable link in password-reset emails - without it, the email shows a code to paste in instead of a link). Auto-detected from Vercel's `VERCEL_URL` when deployed there.
+- `EMAIL_FROM` (optional) - defaults to `AvaTrades <onboarding@resend.dev>`. On Resend's free tier (no verified domain) this must stay as `onboarding@resend.dev`, and mail can only be received at the address you signed up to Resend with; verify a custom domain in Resend for real multi-user delivery.
+- `APP_URL` (optional) - your deployed URL, used only to build the "Open AvaTrades" button in emails (and the clickable link in password-reset emails - without it, the email shows a code to paste in instead of a link). Auto-detected from Vercel's `VERCEL_URL` when deployed there.
 
 ## Price alerts
 
-The Trade page has a **Price alerts** panel under the order book/position list: pick a direction (above/below) and a target USD price for the asset currently open, and NexaTrade notifies you (in-app + email, same pipeline as everything else) the moment the live quote crosses it. Alerts are one-shot - once triggered they move to history and stop watching; create a new one to keep watching an asset. Evaluation piggybacks on the same opportunistic sweep that already fills orders and liquidates positions (`sweepPriceAlerts` in `src/lib/trading-engine.ts`), so no separate cron/worker is needed. A user can have up to 20 open alerts at a time. API: `GET/POST /api/price-alerts`, `PATCH /api/price-alerts/:id` (cancel).
+The Trade page has a **Price alerts** panel under the order book/position list: pick a direction (above/below) and a target USD price for the asset currently open, and AvaTrades notifies you (in-app + email, same pipeline as everything else) the moment the live quote crosses it. Alerts are one-shot - once triggered they move to history and stop watching; create a new one to keep watching an asset. Evaluation piggybacks on the same opportunistic sweep that already fills orders and liquidates positions (`sweepPriceAlerts` in `src/lib/trading-engine.ts`), so no separate cron/worker is needed. A user can have up to 20 open alerts at a time. API: `GET/POST /api/price-alerts`, `PATCH /api/price-alerts/:id` (cancel).
 
 ## Password reset via email
 

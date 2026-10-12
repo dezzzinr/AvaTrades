@@ -5,7 +5,7 @@ import "./market.css";
 import SmartsuppWidget from "@/components/smartsupp-widget";
 
 export const metadata: Metadata = {
-  title: "NexaTrade — Crypto Paper Trading",
+  title: "AvaTrades — Crypto Paper Trading",
   description: "A modern crypto paper trading workspace to explore markets, manage a portfolio, and test strategies with simulated funds.",
 };
 

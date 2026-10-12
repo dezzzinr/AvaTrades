@@ -33,7 +33,7 @@ export const UI_STRINGS: string[] = [
   "Buy", "Sell", "Place trade", "Place order", "Place position",
   // Auth modals
   "Welcome back", "Sign in to pick up right where you left off.", "Email or username", "Password",
-  "Forgot password?", "Please wait...", "New to NexaTrade?",
+  "Forgot password?", "Please wait...", "New to AvaTrades?",
   "Your account is secured with encrypted credentials",
   "Don't have an account?", "Sign up", "Already have an account?",
   "Full Name", "Date of Birth", "Gender", "Country", "State/Province", "City",
@@ -61,12 +61,12 @@ export const UI_STRINGS: string[] = [
   "Copy trading", "Subscribe to a trader's strategy for 7 days and track your subscription history.",
   "Market signals", "A clearer look at price momentum and today's trading range. Not financial advice.",
   "Choose your plan", "Subscribe weekly to unlock more of the platform. No auto-renewal — resubscribe (or switch) once your week is up.",
-  "Add funds", "Send a payment from outside NexaTrade using one of the methods below, then submit your receipt for admin review.",
+  "Add funds", "Send a payment from outside AvaTrades using one of the methods below, then submit your receipt for admin review.",
   "Withdraw funds", "Request a payout to any platform you choose. An admin reviews and sends it before it's final.",
   "Keep track of every deposit, withdrawal, and plan charge.",
   "Trade history", "Review every spot trade, order, and leveraged position in your paper-trading account.",
   // Registration modal
-  "Create your account", "Join NexaTrade",
+  "Create your account", "Join AvaTrades",
   "Your trading journey starts here. Deposit paper funds anytime to start trading. Fields marked * are required.",
   "Prefer not to specify", "Select your country", "Optional",
   "Your balances will display in", "by default — you can change this later in your profile.",

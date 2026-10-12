@@ -6,6 +6,7 @@ import { getUser, createDemoUser, setSession, clearSession } from "@/lib/auth";
 import { getAsset, marketPrice } from "@/lib/market";
 import { getMarketSnapshot } from "@/lib/market-server";
 import { blockedActionMessage, tradeLimitMessage } from "@/lib/accounts";
+import { needsEmailVerification } from "@/lib/email-verification";
 import { executeSpotFill, reservedBuyCash, reservedSellQuantity, sweepForUser } from "@/lib/trading-engine";
 import { getFxRate } from "@/lib/fx-server";
 import { notifyUser } from "@/lib/notify";
@@ -82,6 +83,7 @@ export async function GET(request: NextRequest) {
         username: user.username,
         isDemo: user.isDemo,
         role: user.role,
+        emailVerified: !needsEmailVerification(user),
         cashBalance: Number(user.cashBalance),
         profitBalance: Number(user.profitBalance),
         accountStatus: user.accountStatus,

@@ -228,7 +228,7 @@ export default function ProfilePage({ onRequireAuth, onProfileUpdated, notify }:
         <div className="panel"><div className="empty-state">
           <span className="empty-icon"><UserRound size={27} /></span>
           <h3>Create an account to set up your profile</h3>
-          <p>You&apos;re exploring NexaTrade in demo mode. Create a free account to save your profile details, change your password, and set your preferred currency.</p>
+          <p>You&apos;re exploring AvaTrades in demo mode. Create a free account to save your profile details, change your password, and set your preferred currency.</p>
           <button className="primary-btn" style={{ marginTop: 14 }} onClick={() => onRequireAuth("register")}>Create an account</button>
         </div></div>
       </>
@@ -294,7 +294,7 @@ export default function ProfilePage({ onRequireAuth, onProfileUpdated, notify }:
         </div>
 
         <div className="panel">
-          <h3>Appearance</h3><p className="panel-subtitle">Choose how Nexatrade looks on this device. Saved locally, so other devices keep their own preference.</p>
+          <h3>Appearance</h3><p className="panel-subtitle">Choose how AvaTrades looks on this device. Saved locally, so other devices keep their own preference.</p>
           <div className="theme-row" style={{ padding: 0 }}>
             <div className="theme-row-label"><strong>Theme</strong><span>{theme === "dark" ? "Dark mode is on" : "Light mode is on"}</span></div>
             <div className="theme-switch" data-testid="theme-switch">
