@@ -27,7 +27,7 @@ export type NotificationType =
   | "copy_subscribed" | "copy_cancelled"
   | "plan_subscribed" | "plan_cancelled"
   | "admin_credit" | "admin_debit" | "profit_credit" | "profit_debit" | "account_status_changed"
-  | "admin_message" | "referral_bonus" | "price_alert_triggered";
+  | "admin_message" | "referral_bonus" | "price_alert_triggered" | "target_balance_updated";
 
 // Event types that are purely a self-initiated action the user just saw
 // confirmed on screen (e.g. they clicked "Cancel order" and the row

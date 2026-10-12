@@ -17,6 +17,7 @@ const PUBLIC_COLUMNS = {
   isDemo: users.isDemo,
   cashBalance: users.cashBalance,
   profitBalance: users.profitBalance,
+  targetBalance: users.targetBalance,
   accountStatus: users.accountStatus,
   maxTradeAmount: users.maxTradeAmount,
   withdrawalsBlocked: users.withdrawalsBlocked,

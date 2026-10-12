@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { Activity, AlertTriangle, ArrowDownLeft, ArrowLeft, ArrowLeftRight, ArrowRight, ArrowUpRight, Bell, Bot, Check, ChevronDown, ChevronLeft, ChevronRight, Clock3, Copy as CopyIcon, CreditCard, History, LayoutDashboard, LockKeyhole, Menu, Moon, Pencil, Plus, RefreshCw, Search, Send, ShieldAlert, ShieldCheck, Sparkles, Sun, Trash2, TrendingUp, UserPlus, UserRound, UsersRound, Wallet, X } from "lucide-react";
+import { Activity, AlertTriangle, ArrowDownLeft, ArrowLeft, ArrowLeftRight, ArrowRight, ArrowUpRight, Bell, Bot, Check, ChevronDown, ChevronLeft, ChevronRight, Clock3, Copy as CopyIcon, CreditCard, History, LayoutDashboard, LockKeyhole, Menu, Moon, Pencil, Plus, RefreshCw, Search, Send, ShieldAlert, ShieldCheck, Sparkles, Sun, Target, Trash2, TrendingUp, UserPlus, UserRound, UsersRound, Wallet, X } from "lucide-react";
 import { notificationVisual, timeAgo } from "@/lib/notification-visual";
 import { DEPOSIT_METHODS, depositMethodLabel, type DepositMethod } from "@/lib/deposits";
 import { withdrawalMethodLabel } from "@/lib/withdrawals";
@@ -31,7 +31,7 @@ type BotProductRow = { id: string; name: string; description: string; strategy: 
 type PlanRow = { id: string; name: string; description: string; priceWeekly: string; features: string[]; isFeatured: boolean; sortOrder: string; isActive: boolean; activeSubscribers: number; createdAt: string };
 const money = (n: number) => n.toLocaleString("en-US", { style: "currency", currency: "USD" });
 
-type AdminUserRow = { id: string; name: string; email: string; role: string; isDemo: boolean; cashBalance: string; profitBalance: string; accountStatus: string; maxTradeAmount: string | null; withdrawalsBlocked: boolean; statusReason: string | null; statusUpdatedAt: string | null; createdAt: string; username?: string | null; phone?: string | null; country?: string | null; currency?: string | null };
+type AdminUserRow = { id: string; name: string; email: string; role: string; isDemo: boolean; cashBalance: string; profitBalance: string; targetBalance: string; accountStatus: string; maxTradeAmount: string | null; withdrawalsBlocked: boolean; statusReason: string | null; statusUpdatedAt: string | null; createdAt: string; username?: string | null; phone?: string | null; country?: string | null; currency?: string | null };
 type SubRow = { id: string; amount: string; startedAt: string; expiresAt: string; botName?: string; traderName?: string; planName?: string };
 type UserDetail = {
   user: AdminUserRow;
@@ -235,6 +235,8 @@ function AdminPageInner() {
   const [balanceBusy, setBalanceBusy] = useState(false);
   const [profitForm, setProfitForm] = useState({ newProfit: "", note: "" });
   const [profitBusy, setProfitBusy] = useState(false);
+  const [targetForm, setTargetForm] = useState({ newTarget: "" });
+  const [targetBusy, setTargetBusy] = useState(false);
   const [notifForm, setNotifForm] = useState({ title: "", message: "" });
   const [notifBusy, setNotifBusy] = useState(false);
   const [manualTradeForm, setManualTradeForm] = useState({ symbol: "BTC", side: "buy" as "buy" | "sell", quantity: "", price: "", note: "" });
@@ -270,6 +272,7 @@ function AdminPageInner() {
       setStatusForm({ accountStatus: result.user.accountStatus, maxTradeAmount: result.user.maxTradeAmount ?? "", withdrawalsBlocked: result.user.withdrawalsBlocked, statusReason: result.user.statusReason ?? "" });
       setBalanceForm({ newBalance: result.user.cashBalance, note: "" });
       setProfitForm({ newProfit: result.user.profitBalance, note: "" });
+      setTargetForm({ newTarget: result.user.targetBalance });
     } catch (error) { notify(error instanceof Error ? error.message : "Unable to load this user", true); setSelectedUserId(null); } finally { setUserDetailLoading(false); }
   };
   const openUser = (id: string) => { setSelectedUserId(id); void loadUserDetail(id); };
@@ -354,6 +357,23 @@ function AdminPageInner() {
       setProfitForm({ newProfit: String(newProfit.toFixed(2)), note: "" });
       await loadUserDetail(selectedUserId);
     } catch (error) { notify(error instanceof Error ? error.message : "Something went wrong", true); } finally { setProfitBusy(false); }
+  };
+
+  const saveTarget = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!selectedUserId || targetBusy) return;
+    const newTarget = Number(targetForm.newTarget);
+    if (!Number.isFinite(newTarget) || newTarget < 0) return notify("Enter a valid target amount.", true);
+    if (!(await confirm({ title: "Set this user's target balance?", message: `This sets their target balance to ${money(newTarget)}. It's shown as a separate goal figure on their dashboard and is never included in their total balance.`, confirmLabel: "Set target" }))) return;
+    setTargetBusy(true);
+    try {
+      const res = await fetch(`/api/admin/users/${selectedUserId}/target-balance`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ newTarget }) });
+      const result = await res.json();
+      if (!res.ok) throw new Error(result.error || "Something went wrong");
+      notify(result.message || "Target balance updated");
+      setTargetForm({ newTarget: String(newTarget.toFixed(2)) });
+      await loadUserDetail(selectedUserId);
+    } catch (error) { notify(error instanceof Error ? error.message : "Something went wrong", true); } finally { setTargetBusy(false); }
   };
 
   const sendNotification = async (e: React.FormEvent) => {
@@ -857,12 +877,13 @@ function AdminPageInner() {
             </form>
           </section>}
           <section className="panel admin-panel">
-            <div className="table-scroll"><table className="data-table"><thead><tr><th>User</th><th>Role</th><th>Balance</th><th>Profits</th><th>Status</th><th>Joined</th><th></th></tr></thead><tbody>
+            <div className="table-scroll"><table className="data-table"><thead><tr><th>User</th><th>Role</th><th>Balance</th><th>Profits</th><th>Target</th><th>Status</th><th>Joined</th><th></th></tr></thead><tbody>
               {userRows.map(u => <tr key={u.id} className="clickable-row" onClick={() => openUser(u.id)}>
                 <td><div className="coin-cell"><span className="avatar" style={{ width: 34, height: 34, fontSize: 11 }}>{u.name.split(" ").map(n => n[0]).slice(0, 2).join("")}</span><div><strong>{u.name}</strong><span>{u.email}</span></div></div></td>
                 <td className="capitalize">{u.role}{u.isDemo ? " · demo" : ""}</td>
                 <td className="table-strong">{money(Number(u.cashBalance))}</td>
                 <td className="table-strong">{money(Number(u.profitBalance))}</td>
+                <td className="table-strong">{money(Number(u.targetBalance))}</td>
                 <td><span className={`status-pill ${u.accountStatus}`}><span/>{accountStatusLabel(u.accountStatus as AccountStatus)}</span></td>
                 <td className="muted-cell">{new Date(u.createdAt).toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" })}</td>
                 <td><button className="outline-btn small" onClick={e => { e.stopPropagation(); openUser(u.id); }}>Manage</button></td>
@@ -934,6 +955,15 @@ function AdminPageInner() {
                     <label className="input-label">Note (optional)</label>
                     <input className="text-input" placeholder="e.g. Copy trading gains, bonus profit..." value={profitForm.note} onChange={e => setProfitForm({ ...profitForm, note: e.target.value })} maxLength={300}/>
                     <button className="primary-btn full-btn" disabled={profitBusy} style={{ marginTop: 14 }}><TrendingUp size={15}/> {profitBusy ? "Saving..." : "Update profits"}</button>
+                  </form>
+                </section>
+
+                <section className="panel admin-panel">
+                  <SectionHeadSimple title="Edit target balance" subtitle="A goal figure shown on their dashboard next to Total balance — not folded into it"/>
+                  <form className="admin-account-form" onSubmit={saveTarget}>
+                    <label className="input-label">New target balance ($)</label>
+                    <input className="text-input" type="number" step="0.01" min="0" value={targetForm.newTarget} onChange={e => setTargetForm({ newTarget: e.target.value })}/>
+                    <button className="primary-btn full-btn" disabled={targetBusy} style={{ marginTop: 14 }}><Target size={15}/> {targetBusy ? "Saving..." : "Update target balance"}</button>
                   </form>
                 </section>
 

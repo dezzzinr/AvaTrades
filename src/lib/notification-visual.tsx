@@ -5,7 +5,7 @@
 // to a generic sparkle for unrecognized/legacy types.
 import {
   AlertTriangle, ArrowDownLeft, ArrowLeftRight, ArrowUpRight, Bell, Bot, Clock3, CreditCard, Gift,
-  LockKeyhole, Mail, ShieldCheck, Sparkles, TrendingDown, TrendingUp, UserRound, UsersRound, Wallet,
+  LockKeyhole, Mail, ShieldCheck, Sparkles, Target, TrendingDown, TrendingUp, UserRound, UsersRound, Wallet,
   XCircle,
 } from "lucide-react";
 
@@ -42,6 +42,7 @@ export function notificationVisual(type?: string): { Icon: typeof Sparkles; colo
     case "account_status_changed": return { Icon: AlertTriangle, color: "amber" };
     case "admin_message": return { Icon: ShieldCheck, color: "purple" };
     case "referral_bonus": return { Icon: Gift, color: "green" };
+    case "target_balance_updated": return { Icon: Target, color: "amber" };
     case "price_alert_triggered": return { Icon: Bell, color: "amber" };
     default: return { Icon: Sparkles, color: "purple" };
   }

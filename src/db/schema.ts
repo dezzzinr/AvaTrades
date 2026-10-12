@@ -14,6 +14,13 @@ export const users = pgTable("users", {
   // Edited the same way as cashBalance: admin sets it directly, the delta is
   // logged as a profit_credit/profit_debit transaction, and the user is notified.
   profitBalance: numeric("profit_balance", { precision: 18, scale: 2 }).notNull().default("0.00"),
+  // A purely informational "goal" figure set by admins (e.g. a savings/growth
+  // target shown to the user). Zero by default. Deliberately NOT folded into
+  // cashBalance/profitBalance or the dashboard's "Total balance" figure -
+  // it's shown as its own separate stat next to Total balance. Only admins
+  // can set it (see src/app/api/admin/users/[id]/target-balance/route.ts);
+  // there's no ledger/transaction entry since no real money moves.
+  targetBalance: numeric("target_balance", { precision: 18, scale: 2 }).notNull().default("0.00"),
   isDemo: boolean("is_demo").notNull().default(false),
   role: text("role").notNull().default("user"),
   // --- Profile: personal information (collected at registration, editable
