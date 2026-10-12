@@ -45,8 +45,31 @@ export async function clearSession(request: NextRequest, response: NextResponse)
   response.cookies.delete(COOKIE);
   return response;
 }
+// Every anonymous visitor without a valid session used to get their own
+// brand-new "Alex Morgan" demo user row - on a public site that meant a
+// fresh (never-cleaned-up) row per visit, forever. Instead there is now
+// exactly one shared demo account (name/username "demo"): if it already
+// exists we just reuse it, and only the very first visitor ever creates it
+// (seeding its sample holdings/trades/transaction exactly once).
 export async function createDemoUser() {
-  const [user] = await db.insert(users).values({ name: "Alex Morgan", isDemo: true, cashBalance: "12540.50" }).returning();
+  const [existing] = await db.select().from(users).where(eq(users.isDemo, true)).limit(1);
+  if (existing) return existing;
+
+  try {
+    return await seedDemoUser();
+  } catch {
+    // Lost a race with another concurrent first-ever request also trying
+    // to create the singleton demo user (the unique "demo" username
+    // constraint rejected the second insert) - just reuse whichever one
+    // won.
+    const [fallback] = await db.select().from(users).where(eq(users.isDemo, true)).limit(1);
+    if (fallback) return fallback;
+    throw new Error("Unable to create the demo account.");
+  }
+}
+
+async function seedDemoUser() {
+  const [user] = await db.insert(users).values({ name: "demo", username: "demo", isDemo: true, cashBalance: "12540.50" }).returning();
   await db.insert(holdings).values([
     { userId: user.id, symbol: "BTC", quantity: "0.28450000", avgPrice: "61240.00" },
     { userId: user.id, symbol: "ETH", quantity: "3.25000000", avgPrice: "3180.00" },
@@ -61,3 +84,4 @@ export async function createDemoUser() {
   await db.insert(transactions).values({ userId: user.id, type: "deposit", amount: "25000.00", description: "Demo funds added", createdAt: new Date(Date.now() - 6 * 86400000) });
   return user;
 }
+
