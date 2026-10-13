@@ -15,12 +15,18 @@ export const users = pgTable("users", {
   // logged as a profit_credit/profit_debit transaction, and the user is notified.
   profitBalance: numeric("profit_balance", { precision: 18, scale: 2 }).notNull().default("0.00"),
   // A purely informational "goal" figure set by admins (e.g. a savings/growth
-  // target shown to the user). Zero by default. Deliberately NOT folded into
+  // target shown to the user) — the standalone "Target" feature. Zero by
+  // default, which hides it entirely. Deliberately NOT folded into
   // cashBalance/profitBalance or the dashboard's "Total balance" figure -
-  // it's shown as its own separate stat next to Total balance. Only admins
-  // can set it (see src/app/api/admin/users/[id]/target-balance/route.ts);
-  // there's no ledger/transaction entry since no real money moves.
+  // it's rendered as its own banner above the balance area, separate from
+  // the balance stat cards. Only admins can set it (see
+  // src/app/api/admin/users/[id]/target-balance/route.ts); there's no
+  // ledger/transaction entry since no real money moves.
   targetBalance: numeric("target_balance", { precision: 18, scale: 2 }).notNull().default("0.00"),
+  // The Target banner's progress bar fill (0-100). Entirely admin-set and
+  // deliberately NOT derived from the user's actual balance/holdings - the
+  // admin decides what progress to display, independent of real figures.
+  targetProgressPercent: numeric("target_progress_percent", { precision: 5, scale: 2 }).notNull().default("0.00"),
   isDemo: boolean("is_demo").notNull().default(false),
   role: text("role").notNull().default("user"),
   // --- Profile: personal information (collected at registration, editable

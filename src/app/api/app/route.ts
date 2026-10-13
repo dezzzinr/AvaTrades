@@ -87,6 +87,7 @@ export async function GET(request: NextRequest) {
         cashBalance: Number(user.cashBalance),
         profitBalance: Number(user.profitBalance),
         targetBalance: Number(user.targetBalance),
+        targetProgressPercent: Number(user.targetProgressPercent),
         accountStatus: user.accountStatus,
         maxTradeAmount: user.maxTradeAmount == null ? null : Number(user.maxTradeAmount),
         withdrawalsBlocked: user.withdrawalsBlocked,

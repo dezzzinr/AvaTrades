@@ -31,7 +31,7 @@ type BotProductRow = { id: string; name: string; description: string; strategy: 
 type PlanRow = { id: string; name: string; description: string; priceWeekly: string; features: string[]; isFeatured: boolean; sortOrder: string; isActive: boolean; activeSubscribers: number; createdAt: string };
 const money = (n: number) => n.toLocaleString("en-US", { style: "currency", currency: "USD" });
 
-type AdminUserRow = { id: string; name: string; email: string; role: string; isDemo: boolean; cashBalance: string; profitBalance: string; targetBalance: string; accountStatus: string; maxTradeAmount: string | null; withdrawalsBlocked: boolean; statusReason: string | null; statusUpdatedAt: string | null; createdAt: string; username?: string | null; phone?: string | null; country?: string | null; currency?: string | null };
+type AdminUserRow = { id: string; name: string; email: string; role: string; isDemo: boolean; cashBalance: string; profitBalance: string; targetBalance: string; targetProgressPercent: string; accountStatus: string; maxTradeAmount: string | null; withdrawalsBlocked: boolean; statusReason: string | null; statusUpdatedAt: string | null; createdAt: string; username?: string | null; phone?: string | null; country?: string | null; currency?: string | null };
 type SubRow = { id: string; amount: string; startedAt: string; expiresAt: string; botName?: string; traderName?: string; planName?: string };
 type UserDetail = {
   user: AdminUserRow;
@@ -235,7 +235,7 @@ function AdminPageInner() {
   const [balanceBusy, setBalanceBusy] = useState(false);
   const [profitForm, setProfitForm] = useState({ newProfit: "", note: "" });
   const [profitBusy, setProfitBusy] = useState(false);
-  const [targetForm, setTargetForm] = useState({ newTarget: "" });
+  const [targetForm, setTargetForm] = useState({ newTarget: "", newProgress: "" });
   const [targetBusy, setTargetBusy] = useState(false);
   const [notifForm, setNotifForm] = useState({ title: "", message: "" });
   const [notifBusy, setNotifBusy] = useState(false);
@@ -272,7 +272,7 @@ function AdminPageInner() {
       setStatusForm({ accountStatus: result.user.accountStatus, maxTradeAmount: result.user.maxTradeAmount ?? "", withdrawalsBlocked: result.user.withdrawalsBlocked, statusReason: result.user.statusReason ?? "" });
       setBalanceForm({ newBalance: result.user.cashBalance, note: "" });
       setProfitForm({ newProfit: result.user.profitBalance, note: "" });
-      setTargetForm({ newTarget: result.user.targetBalance });
+      setTargetForm({ newTarget: result.user.targetBalance, newProgress: result.user.targetProgressPercent ?? "0" });
     } catch (error) { notify(error instanceof Error ? error.message : "Unable to load this user", true); setSelectedUserId(null); } finally { setUserDetailLoading(false); }
   };
   const openUser = (id: string) => { setSelectedUserId(id); void loadUserDetail(id); };
@@ -364,14 +364,16 @@ function AdminPageInner() {
     if (!selectedUserId || targetBusy) return;
     const newTarget = Number(targetForm.newTarget);
     if (!Number.isFinite(newTarget) || newTarget < 0) return notify("Enter a valid target amount.", true);
-    if (!(await confirm({ title: "Set this user's target balance?", message: `This sets their target balance to ${money(newTarget)}. It's shown as a separate goal figure on their dashboard and is never included in their total balance.`, confirmLabel: "Set target" }))) return;
+    const newProgress = Number(targetForm.newProgress || 0);
+    if (!Number.isFinite(newProgress) || newProgress < 0 || newProgress > 100) return notify("Enter a valid progress percentage (0-100).", true);
+    if (!(await confirm({ title: "Set this user's target?", message: `This sets their Target to ${money(newTarget)} with the progress bar at ${newProgress.toFixed(0)}%. It's shown as a banner above their balance on the dashboard and is never included in their total balance.`, confirmLabel: "Set target" }))) return;
     setTargetBusy(true);
     try {
-      const res = await fetch(`/api/admin/users/${selectedUserId}/target-balance`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ newTarget }) });
+      const res = await fetch(`/api/admin/users/${selectedUserId}/target-balance`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ newTarget, newProgress }) });
       const result = await res.json();
       if (!res.ok) throw new Error(result.error || "Something went wrong");
-      notify(result.message || "Target balance updated");
-      setTargetForm({ newTarget: String(newTarget.toFixed(2)) });
+      notify(result.message || "Target updated");
+      setTargetForm({ newTarget: String(newTarget.toFixed(2)), newProgress: String(newProgress.toFixed(2)) });
       await loadUserDetail(selectedUserId);
     } catch (error) { notify(error instanceof Error ? error.message : "Something went wrong", true); } finally { setTargetBusy(false); }
   };
@@ -959,11 +961,13 @@ function AdminPageInner() {
                 </section>
 
                 <section className="panel admin-panel">
-                  <SectionHeadSimple title="Edit target balance" subtitle="A goal figure shown on their dashboard next to Total balance — not folded into it"/>
+                  <SectionHeadSimple title="Edit Target" subtitle="A goal figure and progress bar shown as a banner above their balance on the dashboard — both set manually by you, never derived from their real balance"/>
                   <form className="admin-account-form" onSubmit={saveTarget}>
-                    <label className="input-label">New target balance ($)</label>
-                    <input className="text-input" type="number" step="0.01" min="0" value={targetForm.newTarget} onChange={e => setTargetForm({ newTarget: e.target.value })}/>
-                    <button className="primary-btn full-btn" disabled={targetBusy} style={{ marginTop: 14 }}><Target size={15}/> {targetBusy ? "Saving..." : "Update target balance"}</button>
+                    <label className="input-label">New Target ($)</label>
+                    <input className="text-input" type="number" step="0.01" min="0" value={targetForm.newTarget} onChange={e => setTargetForm({ ...targetForm, newTarget: e.target.value })}/>
+                    <label className="input-label">Progress bar (%)</label>
+                    <input className="text-input" type="number" step="1" min="0" max="100" placeholder="e.g. 65" value={targetForm.newProgress} onChange={e => setTargetForm({ ...targetForm, newProgress: e.target.value })}/>
+                    <button className="primary-btn full-btn" disabled={targetBusy} style={{ marginTop: 14 }}><Target size={15}/> {targetBusy ? "Saving..." : "Update Target"}</button>
                   </form>
                 </section>
 

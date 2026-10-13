@@ -28,7 +28,7 @@ type DepositAccount = { id: string; method: string; label: string; instructions:
 type DepositRequest = { id: string; method: string; amount: string; destinationLabel: string | null; reference: string | null; note: string | null; status: string; adminNote: string | null; receiptFilename: string; createdAt: string; reviewedAt: string | null };
 type WithdrawalRequest = { id: string; method: string; methodLabel: string | null; amount: string; destination: string; note: string | null; status: string; adminNote: string | null; createdAt: string; reviewedAt: string | null };
 type Notification = { id: string; type?: string; title: string; message: string; readAt: string | null; createdAt: string; aboutUserId?: string | null };
-type AppData = { user: { id: string; name: string; email: string | null; username?: string | null; isDemo: boolean; role: string; emailVerified: boolean; cashBalance: number; profitBalance: number; targetBalance: number; accountStatus: string; maxTradeAmount: number | null; withdrawalsBlocked: boolean; statusReason: string | null; profilePhoto?: string | null; currency?: string; language?: string }; holdings: { id: string; symbol: string; quantity: string; avgPrice: string }[]; trades: { id: string; symbol: string; side: string; quantity: string; price: string; total: string; createdAt: string; placedBy: string | null; adminNote: string | null }[]; transactions: { id: string; type: string; amount: string; description: string; createdAt: string }[]; plan: string | null; planExpiresAt: string | null; planAmount: number | null; notifications: Notification[]; unreadNotifications: number; fx?: { currency: string; rate: number; status: string; updatedAt: string | null } };
+type AppData = { user: { id: string; name: string; email: string | null; username?: string | null; isDemo: boolean; role: string; emailVerified: boolean; cashBalance: number; profitBalance: number; targetBalance: number; targetProgressPercent: number; accountStatus: string; maxTradeAmount: number | null; withdrawalsBlocked: boolean; statusReason: string | null; profilePhoto?: string | null; currency?: string; language?: string }; holdings: { id: string; symbol: string; quantity: string; avgPrice: string }[]; trades: { id: string; symbol: string; side: string; quantity: string; price: string; total: string; createdAt: string; placedBy: string | null; adminNote: string | null }[]; transactions: { id: string; type: string; amount: string; description: string; createdAt: string }[]; plan: string | null; planExpiresAt: string | null; planAmount: number | null; notifications: Notification[]; unreadNotifications: number; fx?: { currency: string; rate: number; status: string; updatedAt: string | null } };
 type CopyTrader = { id: string; name: string; handle: string; avatarInitials: string; avatarColor: string; focus: string; bio: string; riskLevel: string; returnPercent: string; winRate: string; subscriptionAmount: string; subscriptionDurationDays: number; rating: string; country: string; photoUrl: string | null; activeSubscribers: number; mySubscription: { expiresAt: string; amount: string } | null };
 type CopySubscription = { id: string; traderId: string; traderName: string; traderHandle: string; amount: string; startedAt: string; expiresAt: string };
 type TradingBot = { id: string; name: string; description: string; strategy: string; riskLevel: string; minAllocation: string; subscriptionAmount: string; subscriptionDurationDays: number; rating: string; country: string; photoUrl: string | null; activeSubscribers: number; mySubscription: { expiresAt: string; amount: string } | null };
@@ -39,7 +39,7 @@ type PlanSubscription = { id: string; planId: string; planName: string; amount: 
 type Order = { id: string; symbol: string; side: "buy" | "sell"; type: OrderType; quantity: string; triggerPrice: string; status: string; filledPrice: string | null; filledAt: string | null; cancelledAt: string | null; expiresAt: string | null; createdAt: string };
 type Position = { id: string; symbol: string; side: PositionSide; leverage: string; margin: string; quantity: string; entryPrice: string; liquidationPrice: string; takeProfitPrice: string | null; stopLossPrice: string | null; status: string; closePrice: string | null; closeReason: string | null; realizedPnl: string | null; expiresAt: string | null; createdAt: string; closedAt: string | null; currentPrice?: number; unrealizedPnl?: number };
 const preview: AppData = {
-  user: { id: "preview", name: "Alex Morgan", email: null, username: null, isDemo: true, role: "user", emailVerified: true, cashBalance: 12540.50, profitBalance: 0, targetBalance: 0, accountStatus: "active", maxTradeAmount: null, withdrawalsBlocked: false, statusReason: null, profilePhoto: null, currency: "USD" },
+  user: { id: "preview", name: "demo", email: null, username: null, isDemo: true, role: "user", emailVerified: true, cashBalance: 12540.50, profitBalance: 0, targetBalance: 0, targetProgressPercent: 0, accountStatus: "active", maxTradeAmount: null, withdrawalsBlocked: false, statusReason: null, profilePhoto: null, currency: "USD" },
   holdings: [{ id: "a", symbol: "BTC", quantity: "0.28450000", avgPrice: "61240.00" }, { id: "b", symbol: "ETH", quantity: "3.25000000", avgPrice: "3180.00" }, { id: "c", symbol: "SOL", quantity: "42.00000000", avgPrice: "148.50" }, { id: "d", symbol: "AVAX", quantity: "80.00000000", avgPrice: "34.20" }],
   trades: [{ id: "t1", symbol: "BTC", side: "buy", quantity: "0.08450000", price: "66421.50", total: "5612.62", createdAt: new Date(Date.now() - 7200000).toISOString(), placedBy: null, adminNote: null }, { id: "t2", symbol: "ETH", side: "buy", quantity: "1.25000000", price: "3482.20", total: "4352.75", createdAt: new Date(Date.now() - 90000000).toISOString(), placedBy: null, adminNote: null }, { id: "t3", symbol: "SOL", side: "sell", quantity: "12.00000000", price: "168.40", total: "2020.80", createdAt: new Date(Date.now() - 259200000).toISOString(), placedBy: null, adminNote: null }],
   transactions: [], plan: null, planExpiresAt: null, planAmount: null, notifications: [], unreadNotifications: 0, fx: { currency: "USD", rate: 1, status: "live", updatedAt: null }
@@ -776,8 +776,8 @@ function HomePageInner() {
     {currency !== "USD" && tradeAmount && Number(tradeAmount) > 0 && <p className="form-hint">≈ {money(Number(tradeAmount))}</p>}
     <div className="trade-details"><div><span>Indicative market price</span><strong>{marketPrice(currentAsset.price)}</strong></div><div><span>You'll {side === "buy" ? "receive" : "sell"}</span><strong>≈ {tradeAmount && currentAsset.price > 0 ? fmtQty(Math.floor((Number(tradeAmount) / currentAsset.price) * 1e8) / 1e8) : "0"} {symbol}</strong></div><div><span>Available</span><strong>{side === "buy" ? money(data.user.cashBalance) : `${fmtQty(Number(data.holdings.find(h => h.symbol === symbol)?.quantity ?? 0))} ${symbol}`}</strong></div></div>
     <button className={`primary-btn full-btn ${side === "sell" ? "sell-btn" : ""}`} disabled={loading || !ready || !quoteLive}>{loading ? "Processing..." : !quoteLive ? "Waiting for live prices" : `${side === "buy" ? "Buy" : "Sell"} ${symbol}`} <ArrowRight size={17}/></button>
-    <p className={`trade-quote-note ${quoteLive ? "" : "offline"}`}>{quoteLive ? "Final paper-trade price is verified by the server at execution." : "Live trading pauses until current market quotes are available."}</p>
-    <p className="simulation-note"><ShieldCheck size={13}/> Live trading </p>
+    <p className={`trade-quote-note ${quoteLive ? "" : "offline"}`}>{quoteLive ? "Final Live-trade price is verified by the server at execution." : "Live trading pauses until current market quotes are available."}</p>
+    <p className="simulation-note"><ShieldCheck size={13}/> Live trading only.</p>
   </form>;
   // Shared "custom timer" control used by spot orders, spot market trades,
   // and margin positions: a No-expiry/Set-a-timer toggle, a free-form
@@ -828,7 +828,7 @@ function HomePageInner() {
         <div><span>Available</span><strong>{side === "buy" || isTimedMarketTrade ? money(data.user.cashBalance) : `${fmtQty(Number(data.holdings.find(h => h.symbol === symbol)?.quantity ?? 0))} ${symbol}`}</strong></div>
       </div>
       <button className={`primary-btn full-btn ${side === "sell" ? "sell-btn" : ""}`} disabled={loading || !ready || !quoteLive}>{loading ? "Processing..." : !quoteLive ? "Waiting for live prices" : orderType === "market" ? `${isTimedMarketTrade ? "Open timed" : side === "buy" ? "Buy" : "Sell"} ${symbol}${isTimedMarketTrade ? ` (${side === "buy" ? "long" : "short"})` : ""}` : `Place ${orderTypeLabel(orderType)} order`} <ArrowRight size={17}/></button>
-      <p className={`trade-quote-note ${quoteLive ? "" : "offline"}`}>{quoteLive ? (isTimedMarketTrade ? "This trade opens now at the live price and automatically closes (realizing P&L) after your chosen duration." : orderType === "market" ? "Final paper-trade price is verified by the server at execution." : "Your order sits in the open-orders book until the trigger price is reached.") : "Live trading pauses until current market quotes are available."}</p>
+      <p className={`trade-quote-note ${quoteLive ? "" : "offline"}`}>{quoteLive ? (isTimedMarketTrade ? "This trade opens now at the live price and automatically closes (realizing P&L) after your chosen duration." : orderType === "market" ? "Final Live-trade price is verified by the server at execution." : "Your order sits in the open-orders book until the trigger price is reached.") : "Live trading pauses until current market quotes are available."}</p>
       <p className="simulation-note"><ShieldCheck size={13}/> No trading fees, no slippage — fills happen at the exact quoted price.</p>
     </form>;
   };
@@ -957,12 +957,30 @@ function HomePageInner() {
       </div>}
       {page === "Overview" && <>
         <div className="welcome-row"><div><div className="eyebrow">{date.toUpperCase()}</div><h1>{t("Good to see you,")} {firstName} <span className="wave">✌️</span></h1><p>{t("Here's what's happening with your portfolio today.")}</p></div><div className="welcome-actions"><span className="demo-badge"><span/> {data.user.isDemo ? t("Demo account") : t("Live trading")}</span><button className="outline-btn" onClick={() => go("Deposit")}><Plus size={17}/> {t("Add funds")}</button></div></div>
-        <div className="stats-grid six">
-          {card(Wallet, "Total balance", money(totalBalance), <span>Cash, invested assets, and profits</span>, "blue")}
-          {card(Target, "Target balance", money(data.user.targetBalance), <span>Trade target</span>, "orange")}
+        {data.user.targetBalance > 0 && (() => {
+          const progress = Math.max(0, Math.min(100, data.user.targetProgressPercent));
+          return <div className="target-banner" role="status">
+            <div className="target-banner-icon"><Target size={18}/></div>
+            <div className="target-banner-body">
+              <div className="target-banner-top"><strong>{t("Target")}: {money(data.user.targetBalance)}</strong><span>{progress.toFixed(0)}% reached</span></div>
+              <div className="target-banner-track"><div className="target-banner-fill" style={{ width: `${progress}%` }}/></div>
+            </div>
+          </div>;
+        })()}
+        <div className="total-balance-card">
+          <div className="total-balance-decor"/>
+          <div className="total-balance-top">
+            <span className="total-balance-icon"><Wallet size={20}/></span>
+            <button aria-label={hideBalance ? t("Show balance") : t("Hide balance")} title={hideBalance ? t("Show balance") : t("Hide balance")} className="total-balance-eye" onClick={() => setHideBalance(!hideBalance)}>{hideBalance ? <EyeOff size={17}/> : <Eye size={17}/>}</button>
+          </div>
+          <span className="total-balance-label">{t("Total balance")}</span>
+          <strong className="total-balance-value">{hideBalance ? "••••••" : money(totalBalance)}</strong>
+          <span className="total-balance-sub">{t("Cash, invested assets, and profits")}</span>
+        </div>
+        <div className="stats-grid">
           {card(Activity, "Portfolio value", money(portfolioValue), <span>{data.holdings.length} assets held</span>, "purple")}
-          {card(CreditCard, "Available cash", money(data.user.cashBalance), <span>Ready for trades</span>, "orange")}
-          {card(Gift, "Profits", money(data.user.profitBalance), <span>Earned from trading</span>, "green")}
+          {card(CreditCard, "Available cash", money(data.user.cashBalance), <span>Ready for Live trades</span>, "orange")}
+          {card(Gift, "Profits", money(data.user.profitBalance), <span>Credited by admin</span>, "green")}
           {card(TrendingUp, "Unrealized profit / loss", Number.isFinite(pnl) ? `${pnl >= 0 ? "+" : "-"}${money(Math.abs(pnl))}` : "—", <>{hasQuotes && costBasis > 0 && <span className={pnl >= 0 ? "up-tag" : "negative-tag"}>{pnl >= 0 ? <ArrowUpRight size={13}/> : <ArrowDownRight size={13}/>} {pnl >= 0 ? "+" : ""}{pnlPercent.toFixed(2)}%</span>}<span>vs. your average buy price</span></>, "green")}
         </div>
         <div className="dashboard-grid">
@@ -1023,11 +1041,11 @@ function HomePageInner() {
       {page === "Markets" && <>
         <PageTitle title={t("Explore markets")} description={t("Discover assets and find your next opportunity using CoinGecko market data.")}><button className="outline-btn" onClick={() => { setSearch(""); setMarketTab("All assets"); }}><SlidersHorizontal size={17}/> Reset filters</button></PageTitle>
         <div className="market-highlights">{assets.slice(0, 3).map(a => <button className="highlight-card" key={a.symbol} onClick={() => { setSymbol(a.symbol); go("Trade"); }}><div className="highlight-top"><div className="coin-cell"><AssetIcon asset={a} size={37}/><div><strong>{a.name}</strong><span>{a.symbol}</span></div></div><ArrowUpRight size={17}/></div><div className="highlight-bottom"><div><strong>{marketPrice(a.price)}</strong>{a.price > 0 ? <span className={a.change >= 0 ? "positive-text" : "negative-text"}>{a.change >= 0 ? "+" : ""}{a.change.toFixed(2)}% today</span> : <span className="price-placeholder">Waiting for quotes</span>}</div><Sparkline values={a.chart} positive={a.change7d >= 0} width={112} height={44}/></div></button>)}</div>
-        <section className="panel"><div className="section-head market-section-head"><div><h2>All cryptocurrencies</h2><p>{market.status === "live" ? `Live prices · updated ${asOf}` : market.status === "loading" ? "Loading prices from CoinGecko…" : "Last known prices · trading paused"}</p></div><div className="market-controls"><div className="market-search"><Search size={17}/><input placeholder="Search assets" value={search} onChange={e => setSearch(e.target.value)}/></div><div className="segmented">{["All assets", "Gainers", "Losers", "Watchlist"].map(t => <button key={t} className={marketTab === t ? "active" : ""} onClick={() => setMarketTab(t)}>{t === "Watchlist" ? `${t} (${watchlist.length})` : t}</button>)}</div></div></div>{marketTable(filteredAssets, true)}<p className="market-data-note"><Activity size={13}/> Aggregated market data by CoinGecko. Prices are indicative;</p></section>
+        <section className="panel"><div className="section-head market-section-head"><div><h2>All cryptocurrencies</h2><p>{market.status === "live" ? `Live prices · updated ${asOf}` : market.status === "loading" ? "Loading prices from CoinGecko…" : "Last known prices · trading paused"}</p></div><div className="market-controls"><div className="market-search"><Search size={17}/><input placeholder="Search assets" value={search} onChange={e => setSearch(e.target.value)}/></div><div className="segmented">{["All assets", "Gainers", "Losers", "Watchlist"].map(t => <button key={t} className={marketTab === t ? "active" : ""} onClick={() => setMarketTab(t)}>{t === "Watchlist" ? `${t} (${watchlist.length})` : t}</button>)}</div></div></div>{marketTable(filteredAssets, true)}<p className="market-data-note"><Activity size={13}/> Aggregated market data by CoinGecko. Prices are indicative; trades remain simulated.</p></section>
       </>}
       {page === "Trading Bot" && <>
-        <PageTitle title={t("Trading bots")} description={t("Subscribe to an admin-managed bot strategy, then configure it to trade.")}><span className="demo-badge"><span/> Simulation mode</span></PageTitle>
-        <div className="feature-banner bot-banner"><div className="feature-icon"><Bot size={26}/></div><div><span className="banner-eyebrow">TRADE SMARTER, NOT HARDER</span><h2>Put your strategy on autopilot.</h2><p>Browse admin-curated bot strategies, subscribe for the period shown on each card, then configure any number of instances to trade with.</p></div><div className="banner-art"><Bot size={100} strokeWidth={1}/></div></div>
+        <PageTitle title={t("Trading bots")} description={t("Subscribe to an admin-managed bot strategy, then configure it to trade.")}><span className="demo-badge"><span/> Live mode</span></PageTitle>
+        <div className="feature-banner bot-banner"><div className="feature-icon"><Bot size={26}/></div><div><span className="banner-eyebrow">TRADE SMARTER, NOT HARDER</span><h2>Put your strategy on autopilot.</h2><p>Browse bot strategies, subscribe for the period shown on each card, then configure any number of instances to trade with.</p></div><div className="banner-art"><Bot size={100} strokeWidth={1}/></div></div>
         <div className="section-title-row"><div><h2>Available bots</h2><p>Each subscription runs for the duration shown on its card, starting the moment you subscribe</p></div><span className="subtle-label">{tradingBots.filter(b=>b.mySubscription).length} active</span></div>
         {!tradingBotsLoaded ? <div className="no-results">Loading bots...</div> : tradingBots.length === 0 ? <EmptyState icon={Bot} title="No bots available yet" text="Check back soon — an admin hasn't added any trading bots yet."/> : <div className="trader-grid">{tradingBots.map((b,botIdx)=>{
           const subscribed = !!b.mySubscription;
@@ -1064,7 +1082,7 @@ function HomePageInner() {
             </div>
           </div>;
         })}</div>}
-        <div className="copy-note"><ShieldCheck size={19}/><span>Bots are configurations only and do not execute live trades. Subscribing charges your demo cash balance for that bot&apos;s subscription period; resubscribe once it lapses to keep running your bots.</span></div>
+        <div className="copy-note"><ShieldCheck size={19}/><span>Bots are configurations Subscribing charges your available cash balance for that bot&apos;s subscription period; resubscribe once it lapses to keep running your bots.</span></div>
         <div className="section-title-row"><div><h2>My bots</h2><p>Configured instances across your subscribed bots</p></div></div>
         {botInstances.length === 0 ? <EmptyState icon={Bot} title="No bots configured yet" text="Subscribe to a bot above, then configure an instance to see it here."/> : <div className="panel bot-list">{botInstances.map(bot=><div className="bot-item" key={bot.id}>
           <div className="bot-item-top"><span className="bot-item-icon"><Bot size={22}/></span><span className={`bot-status ${bot.active && bot.subscriptionActive ? "running":"paused"}`}><span/>{bot.active && bot.subscriptionActive ? "Active" : bot.active && !bot.subscriptionActive ? "Needs resubscribe" : "Paused"}</span></div>
@@ -1081,7 +1099,7 @@ function HomePageInner() {
       </>}
       {page === "Copy Trading" && <>
         <PageTitle title={t("Copy trading")} description={t("Subscribe to a trader's strategy and track your subscription history.")}/>
-        <div className="feature-banner copy-banner"><div className="feature-icon"><UsersRound size={25}/></div><div><span className="banner-eyebrow">LEARN FROM THE BEST</span><h2>Great minds trade alike.</h2><p>Browse admin-curated traders and subscribe to follow their strategy for the period shown on each card.</p></div><div className="banner-art"><UsersRound size={105} strokeWidth={1}/></div></div>
+        <div className="feature-banner copy-banner"><div className="feature-icon"><UsersRound size={25}/></div><div><span className="banner-eyebrow">LEARN FROM THE BEST</span><h2>Great minds trade alike.</h2><p>Browse expert traders and subscribe to follow their strategy for the period shown on each card.</p></div><div className="banner-art"><UsersRound size={105} strokeWidth={1}/></div></div>
         <div className="section-title-row"><div><h2>Available traders</h2><p>Each subscription runs for the duration shown on its card, starting the moment you subscribe</p></div><span className="subtle-label">{copyTraders.filter(t=>t.mySubscription).length} active</span></div>
         {!copyTradersLoaded ? <div className="no-results">Loading traders...</div> : copyTraders.length === 0 ? <EmptyState icon={UsersRound} title="No traders available yet" text="Check back soon — an admin hasn't added any copy traders yet."/> : <div className="trader-grid">{copyTraders.map(t=>{
           const subscribed = !!t.mySubscription;
@@ -1109,7 +1127,7 @@ function HomePageInner() {
             </div>
           </div>;
         })}</div>}
-        <div className="copy-note"><ShieldCheck size={19}/><span>Subscribing charges your demo cash balance and grants 7 days of access to that trader's strategy. There is no auto-renewal — resubscribe once your access expires.</span></div>
+        <div className="copy-note"><ShieldCheck size={19}/><span>Subscribing charges your available cash balance and grants 7 days of access to that trader's strategy. There is no auto-renewal — resubscribe once your access expires.</span></div>
         <div className="section-title-row"><div><h2>My subscriptions</h2><p>Your copy trading subscription history</p></div></div>
         {mySubscriptions.length === 0 ? <EmptyState icon={History} title="No subscriptions yet" text="Subscribe to a trader above to see your history here."/> : <div className="table-scroll"><table className="data-table"><thead><tr><th>Trader</th><th>Amount</th><th>Started</th><th>Expires</th><th>Status</th></tr></thead><tbody>{mySubscriptions.map(s=>{
           const left = daysLeft(s.expiresAt);
@@ -1130,11 +1148,11 @@ function HomePageInner() {
             <div className="signal-bottom"><span><Clock3 size={14}/> Updated {a.updatedAt ? new Date(a.updatedAt).toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit" }) : "recently"}</span><button onClick={() => { setSymbol(a.symbol); go("Trade"); }}>View chart <ArrowRight size={15}/></button></div>
           </div>;
         })}</div> : <div className="panel"><EmptyState icon={Signal} title="Market observations unavailable" text="Live market prices have not loaded yet. Try refreshing in a moment."/></div>}
-        <p className="disclaimer">CoinGecko provides market data, not trading advice. </p>
+        <p className="disclaimer">CoinGecko provides market data, not trading advice. All trades and account balances on AvaTrades are simulated.</p>
       </>}
       {page === "Plans" && <>
         <PageTitle title={t("Choose your plan")} description={t("Subscribe weekly to unlock more of the platform. No auto-renewal — resubscribe (or switch) once your week is up.")}/>
-        <div className="plans-intro"><span><Sparkles size={19}/></span> Your current plan is <strong>{data.plan ?? "No active plan"}</strong>{data.planExpiresAt && !!data.planAmount && <> · renews by {new Date(data.planExpiresAt).toLocaleDateString()}</>}. Plan charges are deducted from your balance.</div>
+        <div className="plans-intro"><span><Sparkles size={19}/></span> Your current plan is <strong>{data.plan ?? "No active plan"}</strong>{data.planExpiresAt && !!data.planAmount && <> · renews by {new Date(data.planExpiresAt).toLocaleDateString()}</>}. Plan charges are simulated and deducted from your demo balance.</div>
         {!plansLoaded ? <div className="no-results">Loading plans...</div> : plansCatalog.length === 0 ? <EmptyState icon={Sparkles} title="No plans available yet" text="Check back soon — an admin hasn't added any plans yet."/> : <div className="plans-grid">{plansCatalog.map(p=>{
           const isCurrent = !!p.mySubscription?.isCurrent;
           const left = p.mySubscription ? daysLeft(p.mySubscription.expiresAt) : 0;
@@ -1149,7 +1167,7 @@ function HomePageInner() {
             <p className="subtle-label" style={{marginTop:10}}>{p.activeSubscribers} active subscriber{p.activeSubscribers===1?"":"s"}</p>
           </div>;
         })}</div>}
-        <p className="disclaimer"></p>
+        <p className="disclaimer">Not finnacial advise</p>
         <div className="section-title-row"><div><h2>My plan subscriptions</h2><p>Your plan subscription history</p></div></div>
         {planSubHistory.length === 0 ? <EmptyState icon={History} title="No subscriptions yet" text="Choose a plan above to see your history here."/> : <div className="table-scroll"><table className="data-table"><thead><tr><th>Plan</th><th>Amount</th><th>Started</th><th>Expires</th><th>Status</th></tr></thead><tbody>{planSubHistory.map(s=>{
           const left = daysLeft(s.expiresAt);
@@ -1193,7 +1211,7 @@ function HomePageInner() {
               <label className="input-label">Note for the admin (optional)</label>
               <textarea className="text-input deposit-textarea" placeholder="Anything else the reviewer should know" value={depositNote} onChange={e => setDepositNote(e.target.value)} maxLength={1000} rows={3}/>
               <button className="primary-btn full-btn" disabled={depositSubmitting || !ready}><Paperclip size={16}/>{depositSubmitting ? "Submitting..." : "Submit deposit for review"}</button>
-              <p className="simulation-note"><ShieldCheck size={13}/> Your balance only updates after an admin verifies this receipt. No automatic crediting occurs.</p>
+              <p className="simulation-note"><ShieldCheck size={13}/> Your balance only updates after receipt is verified. No automatic crediting occurs.</p>
             </form>
           </section>
           <section className="panel deposit-history-panel">
@@ -1315,7 +1333,7 @@ function HomePageInner() {
         const visibleOrders = [...myOrders.open, ...myOrders.history].filter(o => matchesSearch(o.symbol));
         const visiblePositions = [...myPositions.open, ...myPositions.history].filter(p => matchesSearch(p.symbol));
         return <>
-        <PageTitle title={t("Trade history")} description={t("Review every spot trade, order, and leveraged position in your paper-trading account.")}><button className="outline-btn" onClick={()=>go("Trade")}><Plus size={17}/> New trade</button></PageTitle>
+        <PageTitle title={t("Trade history")} description={t("Review every spot trade, order, and leveraged position in your Live-trading account.")}><button className="outline-btn" onClick={()=>go("Trade")}><Plus size={17}/> New trade</button></PageTitle>
         <div className="segmented" style={{ marginBottom: 18 }}>{(["Trades", "Orders", "Positions"] as const).map(s => <button key={s} className={historySection === s ? "active" : ""} onClick={() => setHistorySection(s)}>{s}</button>)}</div>
         {historySection === "Trades" && <>
           <div className="stats-grid three">{card(ArrowLeftRight,"Total trades",String(data.trades.length),<span>Completed orders</span>)}{card(ArrowDownLeft,"Buy orders",String(data.trades.filter(t=>t.side==="buy").length),<span>Assets purchased</span>,"green")}{card(ArrowUpRight,"Sell orders",String(data.trades.filter(t=>t.side==="sell").length),<span>Assets sold</span>,"orange")}</div>
@@ -1358,7 +1376,7 @@ function HomePageInner() {
         </>}
         </>;
       })()}
-      <footer className="main-footer"><span>© 2026 AvaTrades. Built for curious traders.</span><span><ShieldCheck size={14}/>  · Not financial advice</span></footer>
+      <footer className="main-footer"><span>© 2026 AvaTrades. Built for curious traders.</span><span><ShieldCheck size={14}/> · Not financial advice</span></footer>
     </main></div>
     {toast && <div className={`toast ${toast.error ? "error":""}`}><span>{toast.error ? <X size={17}/>:<Check size={17}/>}</span>{toast.text}<button onClick={()=>setToast(null)}><X size={15}/></button></div>}
     {authMode==="login" && <div className="modal-overlay" onMouseDown={e=>{if(e.target===e.currentTarget)setAuthMode(null);}}><div className="auth-modal"><button className="modal-close" onClick={()=>setAuthMode(null)} aria-label="Close"><X size={20}/></button><div className="modal-brand"><div className="brand-icon"><Activity size={23} strokeWidth={3}/></div>Ava<span>Trades</span></div><h2>{t("Welcome back")}</h2><p>{t("Sign in to pick up right where you left off.")}</p><form onSubmit={authenticate}><label className="input-label">{t("Email or username")}</label><input className="text-input" placeholder="you@example.com or username" value={authIdentifier} onChange={e=>setAuthIdentifier(e.target.value)} required/><label className="input-label">{t("Password")}</label><input className="text-input" type="password" placeholder="At least 8 characters" value={authPassword} onChange={e=>setAuthPassword(e.target.value)} required/><div className="modal-forgot"><button type="button" onClick={()=>{setAuthMode(null);setForgotPasswordOpen(true);}}>{t("Forgot password?")}</button></div><button className="primary-btn full-btn" disabled={loading}>{loading?t("Please wait..."):t("Sign in")}<ArrowRight size={17}/></button></form><div className="modal-switch">{t("New to AvaTrades?")} <button onClick={()=>setAuthMode("register")}>{t("Create account")}</button></div><div className="modal-security"><LockKeyhole size={14}/> {t("Your account is secured with encrypted credentials")}</div></div></div>}
