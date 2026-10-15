@@ -3,6 +3,7 @@ import { db } from "@/db";
 import { users } from "@/db/schema";
 import { desc, ilike, or, sql } from "drizzle-orm";
 import { requireAdmin, hashPassword } from "@/lib/auth";
+import { convertToUsd } from "@/lib/fx-server";
 
 export const dynamic = "force-dynamic";
 const bad = (message: string, status = 400) => NextResponse.json({ error: message }, { status });
@@ -52,14 +53,24 @@ export async function POST(request: NextRequest) {
     const email = String(body.email ?? "").trim().toLowerCase();
     const password = String(body.password ?? "");
     const role = body.role === "admin" ? "admin" : "user";
-    const cashBalanceInput = body.cashBalance === undefined || body.cashBalance === "" ? 0 : Number(body.cashBalance);
-    const profitBalanceInput = body.profitBalance === undefined || body.profitBalance === "" ? 0 : Number(body.profitBalance);
+    const cashEntered = body.cashBalance === undefined || body.cashBalance === "" ? 0 : Number(body.cashBalance);
+    const profitEntered = body.profitBalance === undefined || body.profitBalance === "" ? 0 : Number(body.profitBalance);
 
     if (name.length < 2 || name.length > 80) return bad("Name must be between 2 and 80 characters.");
     if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) return bad("Enter a valid email address.");
     if (password.length < 8) return bad("Password must be at least 8 characters.");
-    if (!Number.isFinite(cashBalanceInput) || cashBalanceInput < 0 || cashBalanceInput > 100000000) return bad("Enter a valid starting balance.");
-    if (!Number.isFinite(profitBalanceInput) || profitBalanceInput < 0 || profitBalanceInput > 100000000) return bad("Enter a valid starting profit.");
+    if (!Number.isFinite(cashEntered) || cashEntered < 0) return bad("Enter a valid starting balance.");
+    if (!Number.isFinite(profitEntered) || profitEntered < 0) return bad("Enter a valid starting profit.");
+
+    // Both starting amounts share one currency selector: the admin is funding a
+    // brand-new account, so a single "enter these in ..." choice is enough. The
+    // ledger stores USD, so both are converted here on the server.
+    const cash = await convertToUsd(cashEntered, body.currency);
+    if (!cash.ok) return bad(cash.error);
+    const profit = await convertToUsd(profitEntered, body.currency);
+    if (!profit.ok) return bad(profit.error);
+    if (cash.usd > 100000000) return bad("Enter a valid starting balance.");
+    if (profit.usd > 100000000) return bad("Enter a valid starting profit.");
 
     const [existing] = await db.select({ id: users.id }).from(users).where(sql`lower(${users.email}) = ${email}`).limit(1);
     if (existing) return bad("An account with this email already exists.", 409);
@@ -68,12 +79,19 @@ export async function POST(request: NextRequest) {
       name,
       email,
       passwordHash: hashPassword(password),
-      cashBalance: cashBalanceInput.toFixed(2),
-      profitBalance: profitBalanceInput.toFixed(2),
+      cashBalance: cash.usd.toFixed(2),
+      profitBalance: profit.usd.toFixed(2),
       role,
     }).returning(PUBLIC_COLUMNS);
 
-    return NextResponse.json({ success: true, user: row });
+    return NextResponse.json({
+      success: true,
+      user: row,
+      funded: {
+        cash: { usd: cash.usd, entered: { amount: cashEntered, currency: cash.currency, rate: cash.rate } },
+        profit: { usd: profit.usd, entered: { amount: profitEntered, currency: profit.currency, rate: profit.rate } },
+      },
+    });
   } catch (error) {
     console.error("Admin create user:", error);
     return bad("Unable to create user.", 500);

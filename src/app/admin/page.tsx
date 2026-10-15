@@ -12,8 +12,9 @@ import { assets as catalogAssets } from "@/lib/market";
 import { ACCOUNT_STATUSES, accountStatusLabel, type AccountStatus } from "@/lib/accounts";
 import { ConfirmProvider, useConfirm } from "@/components/confirm-provider";
 import { ThemeProvider, useTheme } from "@/components/theme-provider";
+import { formatMoney, formatMarketPrice, formatInCurrency } from "@/lib/currency";
 
-type AdminUser = { id: string; name: string; email: string | null };
+type AdminUser = { id: string; name: string; email: string | null; currency?: string };
 type Notification = { id: string; type?: string; title: string; message: string; readAt: string | null; createdAt: string; aboutUserId?: string | null };
 type DepositRequestRow = {
   id: string; method: string; amount: string; destinationLabel: string | null; reference: string | null; note: string | null;
@@ -29,7 +30,6 @@ type DepositAccountRow = { id: string; method: string; label: string; instructio
 type CopyTraderRow = { id: string; name: string; handle: string; avatarInitials: string; avatarColor: string; focus: string; bio: string; riskLevel: string; returnPercent: string; winRate: string; subscriptionAmount: string; subscriptionDurationDays: number; rating: string; country: string; photoUrl: string | null; isActive: boolean; activeSubscribers: number; createdAt: string };
 type BotProductRow = { id: string; name: string; description: string; strategy: string; riskLevel: string; minAllocation: string; subscriptionAmount: string; subscriptionDurationDays: number; rating: string; country: string; photoUrl: string | null; isActive: boolean; activeSubscribers: number; createdAt: string };
 type PlanRow = { id: string; name: string; description: string; priceWeekly: string; features: string[]; isFeatured: boolean; sortOrder: string; isActive: boolean; activeSubscribers: number; createdAt: string };
-const money = (n: number) => n.toLocaleString("en-US", { style: "currency", currency: "USD" });
 
 type AdminUserRow = { id: string; name: string; email: string; role: string; isDemo: boolean; cashBalance: string; profitBalance: string; targetBalance: string; targetProgressPercent: string; accountStatus: string; maxTradeAmount: string | null; withdrawalsBlocked: boolean; statusReason: string | null; statusUpdatedAt: string | null; createdAt: string; username?: string | null; phone?: string | null; country?: string | null; currency?: string | null };
 type SubRow = { id: string; amount: string; startedAt: string; expiresAt: string; botName?: string; traderName?: string; planName?: string };
@@ -64,6 +64,82 @@ const tabTitles: Record<Tab, { title: string; description: string }> = {
   broadcast: { title: "Broadcast message", description: "Send an announcement to every user at once." },
 };
 
+// Catalog prices (bot minimum allocation, subscription prices, weekly plan
+// prices) and the per-account max-trade-size limit are stored in USD and loaded
+// back into these forms when editing, so they stay USD-denominated on purpose:
+// converting on the way in and out would let an hourly rate refresh silently
+// change a product's stored price. The labels say USD, and this hint shows what
+// users will actually see in the admin's own display currency.
+function StoredUsdHint({ typed, money }: { typed: string; money: (n: number) => string }) {
+  const value = Number(typed);
+  if (!Number.isFinite(value) || value <= 0) return null;
+  return <p className="input-hint">Users see ≈ {money(value)}</p>;
+}
+
+// Currencies an admin can enter a funding amount in: the same list users can
+// choose as their display currency (derived from the supported countries),
+// with USD first because it's the ledger currency and the default.
+const FUNDING_CURRENCIES = [
+  "USD",
+  ...Array.from(new Set(COUNTRIES.map((c) => c.currency).filter((c): c is string => !!c && c !== "USD"))).sort(),
+];
+
+// Currency picker for the admin funding forms, with a live preview of the USD
+// amount that will actually be stored in the ledger.
+//
+// The preview is informational only. The authoritative conversion happens in
+// the API route (convertToUsd), and both sides refuse to guess: if there's no
+// real rate for the chosen currency the preview warns here and the server
+// rejects the request, because converting at 1:1 would credit e.g. $1,331
+// instead of $1 for an NGN amount.
+function FundingCurrency({ id, value, onChange, amounts, rates, status }: {
+  id: string;
+  value: string;
+  onChange: (currency: string) => void;
+  // One entry per amount input this currency applies to (the create-user form
+  // has two: starting balance and starting profits). Labels are only shown
+  // when there's more than one, to keep the single-amount forms compact.
+  amounts: { label?: string; value: string }[];
+  rates: Record<string, number> | null;
+  status: string;
+}) {
+  const rate = value === "USD" ? 1 : rates?.[value];
+  const hasRate = typeof rate === "number" && Number.isFinite(rate) && rate > 0;
+  const showLabels = amounts.length > 1;
+  const previews = hasRate
+    ? amounts
+        .map((a) => ({ label: a.label, entered: Number(a.value), usd: Number(a.value) / (rate as number) }))
+        .filter((a) => Number.isFinite(a.entered) && a.entered > 0)
+    : [];
+  const stale = status === "stale" ? " · rate may be slightly delayed" : "";
+  return (
+    <div>
+      <label className="input-label" htmlFor={id}>Amount currency</label>
+      <div className="select-wrap">
+        <select id={id} value={value} onChange={(e) => onChange(e.target.value)}>
+          {FUNDING_CURRENCIES.map((c) => <option key={c} value={c}>{c}</option>)}
+        </select>
+      </div>
+      {value === "USD" ? (
+        <p className="input-hint">Stored as entered — the ledger is USD.</p>
+      ) : !hasRate ? (
+        <p className="input-hint" style={{ color: "var(--tint-red-fg)" }}>
+          No exchange rate available for {value} right now. Enter the amount in USD instead.
+        </p>
+      ) : (
+        <>
+          {previews.map((p, i) => (
+            <p className="input-hint" key={i}>
+              Will store <strong>{formatMoney(p.usd, "USD", 1)}</strong>{showLabels && p.label ? ` for ${p.label}` : ""}
+            </p>
+          ))}
+          <p className="input-hint">1 USD = {formatInCurrency(rate as number, value, 4)}{stale}</p>
+        </>
+      )}
+    </div>
+  );
+}
+
 export default function AdminPage() {
   return <ThemeProvider><ConfirmProvider><AdminPageInner /></ConfirmProvider></ThemeProvider>;
 }
@@ -72,6 +148,29 @@ function AdminPageInner() {
   const confirm = useConfirm();
   const { theme, toggleTheme } = useTheme();
   const [admin, setAdmin] = useState<AdminUser | null>(null);
+  const [fx, setFx] = useState<{ currency: string; rate: number; status: string; rates?: Record<string, number> } | null>(null);
+  // Every money amount in the admin panel (totals, user balances, trade
+  // history, deposit/withdrawal requests, catalog prices, etc.) is rendered
+  // through this helper, so it always matches the signed-in admin's own
+  // display-currency preference - set from their profile, same as the main
+  // dashboard. The underlying ledger stays in USD; only the display changes.
+  const currency = fx?.currency ?? admin?.currency ?? "USD";
+  const fxRate = fx?.rate ?? 1;
+  const money = (n: number, digits = 2) => formatMoney(n, currency, fxRate, digits);
+  const marketPrice = (n: number) => formatMarketPrice(n, currency, fxRate);
+
+  // Preview, for confirm dialogs, of what an amount entered in `enteredIn`
+  // becomes in the USD ledger. Mirrors the server's convertToUsd, but is
+  // informational only - the API route always redoes the conversion itself and
+  // is the one that refuses to proceed without a real rate.
+  const fundingPreview = (amount: number, enteredIn: string) => {
+    if (enteredIn === "USD") return formatMoney(amount, "USD", 1);
+    const rate = fx?.rates?.[enteredIn];
+    if (typeof rate !== "number" || !Number.isFinite(rate) || rate <= 0) {
+      return `${formatInCurrency(amount, enteredIn)} - no exchange rate available, so this will be rejected. Enter the amount in USD instead.`;
+    }
+    return `${formatInCurrency(amount, enteredIn)} → stored as ${formatMoney(amount / rate, "USD", 1)} (1 USD = ${formatInCurrency(rate, enteredIn, 4)})`;
+  };
   const [authState, setAuthState] = useState<"loading" | "denied" | "ok">("loading");
   const [tab, setTab] = useState<Tab>("overview");
   const [mobileMenu, setMobileMenu] = useState(false);
@@ -221,7 +320,7 @@ function AdminPageInner() {
   const [userSearch, setUserSearch] = useState("");
   const [userTotals, setUserTotals] = useState({ total: 0, totalCashBalance: "0", totalProfitBalance: "0" });
   const [showCreateUser, setShowCreateUser] = useState(false);
-  const [createUserForm, setCreateUserForm] = useState({ name: "", email: "", password: "", cashBalance: "0", profitBalance: "0" });
+  const [createUserForm, setCreateUserForm] = useState({ name: "", email: "", password: "", cashBalance: "0", profitBalance: "0", currency: "USD" });
   const [createUserBusy, setCreateUserBusy] = useState(false);
   const [selectedUserId, setSelectedUserId] = useState<string | null>(null);
   const [userDetail, setUserDetail] = useState<UserDetail | null>(null);
@@ -231,11 +330,11 @@ function AdminPageInner() {
   const [editUserBusy, setEditUserBusy] = useState(false);
   const [statusForm, setStatusForm] = useState({ accountStatus: "active" as AccountStatus, maxTradeAmount: "", withdrawalsBlocked: false, statusReason: "" });
   const [statusBusy, setStatusBusy] = useState(false);
-  const [balanceForm, setBalanceForm] = useState({ newBalance: "", note: "" });
+  const [balanceForm, setBalanceForm] = useState({ newBalance: "", note: "", currency: "USD" });
   const [balanceBusy, setBalanceBusy] = useState(false);
-  const [profitForm, setProfitForm] = useState({ newProfit: "", note: "" });
+  const [profitForm, setProfitForm] = useState({ newProfit: "", note: "", currency: "USD" });
   const [profitBusy, setProfitBusy] = useState(false);
-  const [targetForm, setTargetForm] = useState({ newTarget: "", newProgress: "" });
+  const [targetForm, setTargetForm] = useState({ newTarget: "", newProgress: "", currency: "USD" });
   const [targetBusy, setTargetBusy] = useState(false);
   const [notifForm, setNotifForm] = useState({ title: "", message: "" });
   const [notifBusy, setNotifBusy] = useState(false);
@@ -270,9 +369,13 @@ function AdminPageInner() {
       setUserDetail(result);
       setEditUserForm({ name: result.user.name, email: result.user.email, role: result.user.role });
       setStatusForm({ accountStatus: result.user.accountStatus, maxTradeAmount: result.user.maxTradeAmount ?? "", withdrawalsBlocked: result.user.withdrawalsBlocked, statusReason: result.user.statusReason ?? "" });
-      setBalanceForm({ newBalance: result.user.cashBalance, note: "" });
-      setProfitForm({ newProfit: result.user.profitBalance, note: "" });
-      setTargetForm({ newTarget: result.user.targetBalance, newProgress: result.user.targetProgressPercent ?? "0" });
+      // Default each funding form to the target user's own display currency:
+      // an admin funding a Nigerian user is most likely thinking in NGN. USD
+      // stays selectable, and the picker previews the USD amount either way.
+      const fundCurrency = result.user.currency || "USD";
+      setBalanceForm({ newBalance: result.user.cashBalance, note: "", currency: fundCurrency });
+      setProfitForm({ newProfit: result.user.profitBalance, note: "", currency: fundCurrency });
+      setTargetForm({ newTarget: result.user.targetBalance, newProgress: result.user.targetProgressPercent ?? "0", currency: fundCurrency });
     } catch (error) { notify(error instanceof Error ? error.message : "Unable to load this user", true); setSelectedUserId(null); } finally { setUserDetailLoading(false); }
   };
   const openUser = (id: string) => { setSelectedUserId(id); void loadUserDetail(id); };
@@ -284,14 +387,22 @@ function AdminPageInner() {
     if (createUserForm.name.trim().length < 2) return notify("Enter the user's name.", true);
     if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(createUserForm.email.trim())) return notify("Enter a valid email address.", true);
     if (createUserForm.password.length < 8) return notify("Password must be at least 8 characters.", true);
-    if (!(await confirm({ title: "Create this user?", message: `Creates an account for ${createUserForm.name.trim()} (${createUserForm.email.trim()}).` }))) return;
+    // Spell out any starting-funds conversion in the confirmation: the amounts
+    // are stored in USD, so if they were entered in another currency the admin
+    // should see both figures before the account is created.
+    const startCash = Number(createUserForm.cashBalance || 0);
+    const startProfit = Number(createUserForm.profitBalance || 0);
+    const fundingLine = createUserForm.currency !== "USD" && (startCash > 0 || startProfit > 0)
+      ? ` Starting funds are entered in ${createUserForm.currency} and will be stored as USD: balance ${fundingPreview(startCash, createUserForm.currency)}, profits ${fundingPreview(startProfit, createUserForm.currency)}.`
+      : "";
+    if (!(await confirm({ title: "Create this user?", message: `Creates an account for ${createUserForm.name.trim()} (${createUserForm.email.trim()}).${fundingLine}` }))) return;
     setCreateUserBusy(true);
     try {
       const res = await fetch("/api/admin/users", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(createUserForm) });
       const result = await res.json();
       if (!res.ok) throw new Error(result.error || "Something went wrong");
       notify(`${result.user?.name ?? "User"} created`);
-      setCreateUserForm({ name: "", email: "", password: "", cashBalance: "0", profitBalance: "0" });
+      setCreateUserForm({ name: "", email: "", password: "", cashBalance: "0", profitBalance: "0", currency: "USD" });
       setShowCreateUser(false);
       await loadUsers(userSearch);
     } catch (error) { notify(error instanceof Error ? error.message : "Something went wrong", true); } finally { setCreateUserBusy(false); }
@@ -330,14 +441,14 @@ function AdminPageInner() {
     if (!selectedUserId || balanceBusy) return;
     const newBalance = Number(balanceForm.newBalance);
     if (!Number.isFinite(newBalance) || newBalance < 0) return notify("Enter a valid balance.", true);
-    if (!(await confirm({ title: "Set this user's balance?", message: `This directly sets their cash balance to ${money(newBalance)} and logs the difference as an admin credit/debit.`, confirmLabel: "Set balance", danger: true }))) return;
+    if (!(await confirm({ title: "Set this user's balance?", message: `This directly sets their cash balance to ${fundingPreview(newBalance, balanceForm.currency)} and logs the difference as an admin credit/debit.`, confirmLabel: "Set balance", danger: true }))) return;
     setBalanceBusy(true);
     try {
-      const res = await fetch(`/api/admin/users/${selectedUserId}/balance`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ newBalance, note: balanceForm.note }) });
+      const res = await fetch(`/api/admin/users/${selectedUserId}/balance`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ newBalance, currency: balanceForm.currency, note: balanceForm.note }) });
       const result = await res.json();
       if (!res.ok) throw new Error(result.error || "Something went wrong");
       notify(result.message || "Balance updated");
-      setBalanceForm({ newBalance: String(newBalance.toFixed(2)), note: "" });
+      setBalanceForm({ newBalance: String(newBalance.toFixed(2)), note: "", currency: balanceForm.currency });
       await loadUserDetail(selectedUserId);
     } catch (error) { notify(error instanceof Error ? error.message : "Something went wrong", true); } finally { setBalanceBusy(false); }
   };
@@ -347,14 +458,14 @@ function AdminPageInner() {
     if (!selectedUserId || profitBusy) return;
     const newProfit = Number(profitForm.newProfit);
     if (!Number.isFinite(newProfit) || newProfit < 0) return notify("Enter a valid profit amount.", true);
-    if (!(await confirm({ title: "Set this user's profits?", message: `This directly sets their profit balance to ${money(newProfit)} and logs the difference as a profit credit/debit. It's folded into their total balance.`, confirmLabel: "Set profits", danger: true }))) return;
+    if (!(await confirm({ title: "Set this user's profits?", message: `This directly sets their profit balance to ${fundingPreview(newProfit, profitForm.currency)} and logs the difference as a profit credit/debit. It's folded into their total balance.`, confirmLabel: "Set profits", danger: true }))) return;
     setProfitBusy(true);
     try {
-      const res = await fetch(`/api/admin/users/${selectedUserId}/profit`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ newProfit, note: profitForm.note }) });
+      const res = await fetch(`/api/admin/users/${selectedUserId}/profit`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ newProfit, currency: profitForm.currency, note: profitForm.note }) });
       const result = await res.json();
       if (!res.ok) throw new Error(result.error || "Something went wrong");
       notify(result.message || "Profit balance updated");
-      setProfitForm({ newProfit: String(newProfit.toFixed(2)), note: "" });
+      setProfitForm({ newProfit: String(newProfit.toFixed(2)), note: "", currency: profitForm.currency });
       await loadUserDetail(selectedUserId);
     } catch (error) { notify(error instanceof Error ? error.message : "Something went wrong", true); } finally { setProfitBusy(false); }
   };
@@ -366,14 +477,14 @@ function AdminPageInner() {
     if (!Number.isFinite(newTarget) || newTarget < 0) return notify("Enter a valid target amount.", true);
     const newProgress = Number(targetForm.newProgress || 0);
     if (!Number.isFinite(newProgress) || newProgress < 0 || newProgress > 100) return notify("Enter a valid progress percentage (0-100).", true);
-    if (!(await confirm({ title: "Set this user's target?", message: `This sets their Target to ${money(newTarget)} with the progress bar at ${newProgress.toFixed(0)}%. It's shown as a banner above their balance on the dashboard and is never included in their total balance.`, confirmLabel: "Set target" }))) return;
+    if (!(await confirm({ title: "Set this user's target?", message: `This sets their Target to ${fundingPreview(newTarget, targetForm.currency)} with the progress bar at ${newProgress.toFixed(0)}%. It's shown as a banner above their balance on the dashboard and is never included in their total balance.`, confirmLabel: "Set target" }))) return;
     setTargetBusy(true);
     try {
-      const res = await fetch(`/api/admin/users/${selectedUserId}/target-balance`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ newTarget, newProgress }) });
+      const res = await fetch(`/api/admin/users/${selectedUserId}/target-balance`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ newTarget, newProgress, currency: targetForm.currency }) });
       const result = await res.json();
       if (!res.ok) throw new Error(result.error || "Something went wrong");
       notify(result.message || "Target updated");
-      setTargetForm({ newTarget: String(newTarget.toFixed(2)), newProgress: String(newProgress.toFixed(2)) });
+      setTargetForm({ newTarget: String(newTarget.toFixed(2)), newProgress: String(newProgress.toFixed(2)), currency: targetForm.currency });
       await loadUserDetail(selectedUserId);
     } catch (error) { notify(error instanceof Error ? error.message : "Something went wrong", true); } finally { setTargetBusy(false); }
   };
@@ -400,10 +511,10 @@ function AdminPageInner() {
     if (!selectedUserId || manualTradeBusy) return;
     const quantity = Number(manualTradeForm.quantity);
     if (!quantity || quantity <= 0) return notify("Enter a valid quantity.", true);
-    if (!(await confirm({ title: `Place this ${manualTradeForm.side} trade for the user?`, message: `${manualTradeForm.side === "buy" ? "Buy" : "Sell"} ${quantity} ${manualTradeForm.symbol} on their behalf${manualTradeForm.price ? ` at $${manualTradeForm.price}` : " at the live market price"}.`, confirmLabel: "Place trade", danger: true }))) return;
+    if (!(await confirm({ title: `Place this ${manualTradeForm.side} trade for the user?`, message: `${manualTradeForm.side === "buy" ? "Buy" : "Sell"} ${quantity} ${manualTradeForm.symbol} on their behalf${manualTradeForm.price ? ` at ${formatInCurrency(Number(manualTradeForm.price), currency)}` : " at the live market price"}.`, confirmLabel: "Place trade", danger: true }))) return;
     setManualTradeBusy(true);
     try {
-      const res = await fetch(`/api/admin/users/${selectedUserId}/trades`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ symbol: manualTradeForm.symbol, side: manualTradeForm.side, quantity, price: manualTradeForm.price || undefined, note: manualTradeForm.note }) });
+      const res = await fetch(`/api/admin/users/${selectedUserId}/trades`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ symbol: manualTradeForm.symbol, side: manualTradeForm.side, quantity, price: manualTradeForm.price || undefined, currency, note: manualTradeForm.note }) });
       const result = await res.json();
       if (!res.ok) throw new Error(result.error || "Something went wrong");
       notify(result.message || "Trade placed");
@@ -430,6 +541,7 @@ function AdminPageInner() {
       if (!r.ok) { setAuthState("denied"); return; }
       const result = await r.json();
       setAdmin(result.user);
+      setFx(result.fx ?? null);
       setAuthState("ok");
     }).catch(() => setAuthState("denied"));
   }, []);
@@ -787,7 +899,7 @@ function AdminPageInner() {
               <button className="notification-see-all" onClick={() => { setNotificationsOpen(false); setTab("notifications"); }}>See all notifications <ArrowRight size={13}/></button>
             </div>}
           </div>
-          <button className="theme-toggle" aria-label={theme === "dark" ? "Switch to light mode" : "Switch to dark mode"} title={theme === "dark" ? "Switch to light mode" : "Switch to dark mode"} onClick={toggleTheme}>{theme === "dark" ? <Sun size={19}/> : <Moon size={19}/>}</button><span className="admin-whoami"><ShieldCheck size={15}/> {admin?.name} · Admin</span><a href="/" className="outline-btn small"><ArrowLeft size={14}/> Exit to app</a></div>
+          <button className="theme-toggle" aria-label={theme === "dark" ? "Switch to light mode" : "Switch to dark mode"} title={theme === "dark" ? "Switch to light mode" : "Switch to dark mode"} onClick={toggleTheme}>{theme === "dark" ? <Sun size={19}/> : <Moon size={19}/>}</button>{currency !== "USD" && <span className="admin-whoami" title="Change this from your Profile page in the main app"><Wallet size={14}/> Amounts in {currency}</span>}<span className="admin-whoami"><ShieldCheck size={15}/> {admin?.name} · Admin</span><a href="/" className="outline-btn small"><ArrowLeft size={14}/> Exit to app</a></div>
       </header>
       <main className="admin-content">
         <div className="page-heading"><div><div className="eyebrow">ADMIN PANEL</div><h1>{active.title}</h1><p>{active.description}</p></div></div>
@@ -873,8 +985,9 @@ function AdminPageInner() {
               <div><label className="input-label">Full name</label><input className="text-input" value={createUserForm.name} onChange={e => setCreateUserForm({ ...createUserForm, name: e.target.value })} maxLength={80}/></div>
               <div><label className="input-label">Email</label><input className="text-input" type="email" value={createUserForm.email} onChange={e => setCreateUserForm({ ...createUserForm, email: e.target.value })}/></div>
               <div><label className="input-label">Password</label><input className="text-input" type="password" placeholder="At least 8 characters" value={createUserForm.password} onChange={e => setCreateUserForm({ ...createUserForm, password: e.target.value })}/></div>
-              <div><label className="input-label">Starting balance ($)</label><input className="text-input" type="number" step="0.01" min="0" value={createUserForm.cashBalance} onChange={e => setCreateUserForm({ ...createUserForm, cashBalance: e.target.value })}/></div>
-              <div><label className="input-label">Starting profits ($)</label><input className="text-input" type="number" step="0.01" min="0" value={createUserForm.profitBalance} onChange={e => setCreateUserForm({ ...createUserForm, profitBalance: e.target.value })}/></div>
+              <div><label className="input-label">Starting balance</label><input className="text-input" type="number" step="0.01" min="0" value={createUserForm.cashBalance} onChange={e => setCreateUserForm({ ...createUserForm, cashBalance: e.target.value })}/></div>
+              <div><label className="input-label">Starting profits</label><input className="text-input" type="number" step="0.01" min="0" value={createUserForm.profitBalance} onChange={e => setCreateUserForm({ ...createUserForm, profitBalance: e.target.value })}/></div>
+              <FundingCurrency id="create-user-fund-currency" value={createUserForm.currency} onChange={c => setCreateUserForm({ ...createUserForm, currency: c })} amounts={[{ label: "starting balance", value: createUserForm.cashBalance }, { label: "starting profits", value: createUserForm.profitBalance }]} rates={fx?.rates ?? null} status={fx?.status ?? "live"}/>
               <div style={{ gridColumn: "1 / -1", display: "flex", gap: 10, marginTop: 14 }}><button className="primary-btn" disabled={createUserBusy}>{createUserBusy ? "Creating..." : "Create user"}</button><button type="button" className="outline-btn" onClick={() => setShowCreateUser(false)}>Cancel</button></div>
             </form>
           </section>}
@@ -928,8 +1041,9 @@ function AdminPageInner() {
                     <label className="input-label">Status</label>
                     <div className="select-wrap"><select value={statusForm.accountStatus} onChange={e => setStatusForm({ ...statusForm, accountStatus: e.target.value as AccountStatus })}>{ACCOUNT_STATUSES.map(s => <option key={s} value={s}>{accountStatusLabel(s)}</option>)}</select><ChevronDown size={16}/></div>
                     {statusForm.accountStatus === "limited" && <>
-                      <label className="input-label">Max trade size ($, optional)</label>
+                      <label className="input-label">Max trade size (USD, optional)</label>
                       <input className="text-input" type="number" step="0.01" min="0" placeholder="No limit" value={statusForm.maxTradeAmount} onChange={e => setStatusForm({ ...statusForm, maxTradeAmount: e.target.value })}/>
+                      {currency !== "USD" && <StoredUsdHint typed={statusForm.maxTradeAmount} money={money}/>}
                       <label className="checkbox-row"><input type="checkbox" checked={statusForm.withdrawalsBlocked} onChange={e => setStatusForm({ ...statusForm, withdrawalsBlocked: e.target.checked })}/> Block withdrawals</label>
                     </>}
                     <label className="input-label">Reason (optional, shown to user)</label>
@@ -941,8 +1055,9 @@ function AdminPageInner() {
                 <section className="panel admin-panel">
                   <SectionHeadSimple title="Edit balance" subtitle="Directly set this user's cash balance"/>
                   <form className="admin-account-form" onSubmit={saveBalance}>
-                    <label className="input-label">New balance ($)</label>
+                    <label className="input-label">New balance</label>
                     <input className="text-input" type="number" step="0.01" min="0" value={balanceForm.newBalance} onChange={e => setBalanceForm({ ...balanceForm, newBalance: e.target.value })}/>
+                    <FundingCurrency id="balance-currency" value={balanceForm.currency} onChange={c => setBalanceForm({ ...balanceForm, currency: c })} amounts={[{ value: balanceForm.newBalance }]} rates={fx?.rates ?? null} status={fx?.status ?? "live"}/>
                     <label className="input-label">Note (optional)</label>
                     <input className="text-input" placeholder="e.g. Manual correction, bonus credit..." value={balanceForm.note} onChange={e => setBalanceForm({ ...balanceForm, note: e.target.value })} maxLength={300}/>
                     <button className="primary-btn full-btn" disabled={balanceBusy} style={{ marginTop: 14 }}><Wallet size={15}/> {balanceBusy ? "Saving..." : "Update balance"}</button>
@@ -952,8 +1067,9 @@ function AdminPageInner() {
                 <section className="panel admin-panel">
                   <SectionHeadSimple title="Edit profits" subtitle="Directly set this user's profit balance — folded into their total balance"/>
                   <form className="admin-account-form" onSubmit={saveProfit}>
-                    <label className="input-label">New profits ($)</label>
+                    <label className="input-label">New profits</label>
                     <input className="text-input" type="number" step="0.01" min="0" value={profitForm.newProfit} onChange={e => setProfitForm({ ...profitForm, newProfit: e.target.value })}/>
+                    <FundingCurrency id="profit-currency" value={profitForm.currency} onChange={c => setProfitForm({ ...profitForm, currency: c })} amounts={[{ value: profitForm.newProfit }]} rates={fx?.rates ?? null} status={fx?.status ?? "live"}/>
                     <label className="input-label">Note (optional)</label>
                     <input className="text-input" placeholder="e.g. Copy trading gains, bonus profit..." value={profitForm.note} onChange={e => setProfitForm({ ...profitForm, note: e.target.value })} maxLength={300}/>
                     <button className="primary-btn full-btn" disabled={profitBusy} style={{ marginTop: 14 }}><TrendingUp size={15}/> {profitBusy ? "Saving..." : "Update profits"}</button>
@@ -963,8 +1079,9 @@ function AdminPageInner() {
                 <section className="panel admin-panel">
                   <SectionHeadSimple title="Edit Target" subtitle="A goal figure and progress bar shown as a banner above their balance on the dashboard — both set manually by you, never derived from their real balance"/>
                   <form className="admin-account-form" onSubmit={saveTarget}>
-                    <label className="input-label">New Target ($)</label>
+                    <label className="input-label">New Target</label>
                     <input className="text-input" type="number" step="0.01" min="0" value={targetForm.newTarget} onChange={e => setTargetForm({ ...targetForm, newTarget: e.target.value })}/>
+                    <FundingCurrency id="target-currency" value={targetForm.currency} onChange={c => setTargetForm({ ...targetForm, currency: c })} amounts={[{ value: targetForm.newTarget }]} rates={fx?.rates ?? null} status={fx?.status ?? "live"}/>
                     <label className="input-label">Progress bar (%)</label>
                     <input className="text-input" type="number" step="1" min="0" max="100" placeholder="e.g. 65" value={targetForm.newProgress} onChange={e => setTargetForm({ ...targetForm, newProgress: e.target.value })}/>
                     <button className="primary-btn full-btn" disabled={targetBusy} style={{ marginTop: 14 }}><Target size={15}/> {targetBusy ? "Saving..." : "Update Target"}</button>
@@ -990,7 +1107,7 @@ function AdminPageInner() {
                     <div className="select-wrap"><select value={manualTradeForm.symbol} onChange={e => setManualTradeForm({ ...manualTradeForm, symbol: e.target.value })}>{catalogAssets.map(a => <option key={a.symbol} value={a.symbol}>{a.name} ({a.symbol})</option>)}</select><ChevronDown size={16}/></div>
                     <label className="input-label">Quantity</label>
                     <input className="text-input" type="number" step="any" min="0" value={manualTradeForm.quantity} onChange={e => setManualTradeForm({ ...manualTradeForm, quantity: e.target.value })}/>
-                    <label className="input-label">Custom fill price ($, optional — defaults to live price)</label>
+                    <label className="input-label">Custom fill price ({currency}, optional — defaults to live price)</label>
                     <input className="text-input" type="number" step="0.01" min="0" placeholder="Live market price" value={manualTradeForm.price} onChange={e => setManualTradeForm({ ...manualTradeForm, price: e.target.value })}/>
                     <label className="input-label">Note (optional)</label>
                     <input className="text-input" placeholder="e.g. Quoted over phone at 10:45am" value={manualTradeForm.note} onChange={e => setManualTradeForm({ ...manualTradeForm, note: e.target.value })} maxLength={300}/>
@@ -1017,7 +1134,7 @@ function AdminPageInner() {
                 <section className="panel admin-panel">
                   <SectionHeadSimple title="Recent trades"/>
                   <div className="table-scroll"><table className="data-table"><thead><tr><th>Asset</th><th>Side</th><th>Qty</th><th>Price</th><th>Total</th><th>Date</th></tr></thead><tbody>
-                    {userDetail.trades.map(t => <tr key={t.id}><td className="table-strong">{t.symbol}{t.placedBy && <span className="placed-by-support-badge"> <UserRound size={11}/> Admin</span>}</td><td className="capitalize">{t.side}</td><td>{Number(t.quantity)}</td><td>{money(Number(t.price))}</td><td className="table-strong">{money(Number(t.total))}</td><td className="muted-cell">{new Date(t.createdAt).toLocaleDateString()}</td></tr>)}
+                    {userDetail.trades.map(t => <tr key={t.id}><td className="table-strong">{t.symbol}{t.placedBy && <span className="placed-by-support-badge"> <UserRound size={11}/> Admin</span>}</td><td className="capitalize">{t.side}</td><td>{Number(t.quantity)}</td><td>{marketPrice(Number(t.price))}</td><td className="table-strong">{money(Number(t.total))}</td><td className="muted-cell">{new Date(t.createdAt).toLocaleDateString()}</td></tr>)}
                   </tbody></table>{userDetail.trades.length === 0 && <div className="empty-state"><span className="empty-icon"><History size={27}/></span><h3>No trades yet</h3><p>&nbsp;</p></div>}</div>
                 </section>
 
@@ -1194,8 +1311,9 @@ function AdminPageInner() {
               <input className="text-input" type="number" step="0.01" placeholder="e.g. 42.80" value={traderForm.returnPercent} onChange={e => setTraderForm({ ...traderForm, returnPercent: e.target.value })}/>
               <label className="input-label">Win rate %</label>
               <input className="text-input" type="number" step="0.01" min="0" max="100" placeholder="e.g. 78" value={traderForm.winRate} onChange={e => setTraderForm({ ...traderForm, winRate: e.target.value })}/>
-              <label className="input-label">Subscription price</label>
+              <label className="input-label">Subscription price (USD)</label>
               <input className="text-input" type="number" step="0.01" min="0" placeholder="e.g. 49.00" value={traderForm.subscriptionAmount} onChange={e => setTraderForm({ ...traderForm, subscriptionAmount: e.target.value })}/>
+              {currency !== "USD" && <StoredUsdHint typed={traderForm.subscriptionAmount} money={money}/>}
               <label className="input-label">Subscription duration</label>
               <div className="select-wrap"><select value={traderForm.subscriptionDurationDays} onChange={e => setTraderForm({ ...traderForm, subscriptionDurationDays: e.target.value })}>{SUBSCRIPTION_DURATION_OPTIONS.map(d => <option key={d} value={d}>{d} days</option>)}</select></div>
               <label className="input-label">Rating (0-5)</label>
@@ -1223,7 +1341,7 @@ function AdminPageInner() {
                   <div className="select-wrap"><select value={editTraderForm.riskLevel} onChange={e => setEditTraderForm({ ...editTraderForm, riskLevel: e.target.value as RiskLevel })}>{RISK_LEVELS.map(r => <option key={r} value={r}>{r}</option>)}</select></div>
                   <input className="text-input" type="number" step="0.01" value={editTraderForm.returnPercent} onChange={e => setEditTraderForm({ ...editTraderForm, returnPercent: e.target.value })} placeholder="Return %"/>
                   <input className="text-input" type="number" step="0.01" value={editTraderForm.winRate} onChange={e => setEditTraderForm({ ...editTraderForm, winRate: e.target.value })} placeholder="Win rate %"/>
-                  <input className="text-input" type="number" step="0.01" min="0" value={editTraderForm.subscriptionAmount} onChange={e => setEditTraderForm({ ...editTraderForm, subscriptionAmount: e.target.value })} placeholder="Subscription price"/>
+                  <input className="text-input" type="number" step="0.01" min="0" value={editTraderForm.subscriptionAmount} onChange={e => setEditTraderForm({ ...editTraderForm, subscriptionAmount: e.target.value })} placeholder="Subscription price (USD)"/>
                   <div className="select-wrap"><select value={editTraderForm.subscriptionDurationDays} onChange={e => setEditTraderForm({ ...editTraderForm, subscriptionDurationDays: e.target.value })}>{SUBSCRIPTION_DURATION_OPTIONS.map(d => <option key={d} value={d}>{d} days</option>)}</select></div>
                   <input className="text-input" type="number" step="0.1" min="0" max="5" value={editTraderForm.rating} onChange={e => setEditTraderForm({ ...editTraderForm, rating: e.target.value })} placeholder="Rating (0-5)"/>
                   <div className="select-wrap"><select value={editTraderForm.country} onChange={e => setEditTraderForm({ ...editTraderForm, country: e.target.value })}>{COUNTRIES.map(c => <option key={c.code} value={c.code}>{c.flag} {c.name}</option>)}</select></div>
@@ -1260,10 +1378,12 @@ function AdminPageInner() {
               <div className="select-wrap"><select value={botForm.strategy} onChange={e => setBotForm({ ...botForm, strategy: e.target.value as BotStrategy })}>{BOT_STRATEGIES.map(s => <option key={s} value={s}>{s}</option>)}</select></div>
               <label className="input-label">Risk level</label>
               <div className="select-wrap"><select value={botForm.riskLevel} onChange={e => setBotForm({ ...botForm, riskLevel: e.target.value as RiskLevel })}>{RISK_LEVELS.map(r => <option key={r} value={r}>{r}</option>)}</select></div>
-              <label className="input-label">Minimum allocation ($)</label>
+              <label className="input-label">Minimum allocation (USD)</label>
               <input className="text-input" type="number" step="0.01" min="0" placeholder="e.g. 100.00" value={botForm.minAllocation} onChange={e => setBotForm({ ...botForm, minAllocation: e.target.value })}/>
-              <label className="input-label">Subscription price</label>
+              {currency !== "USD" && <StoredUsdHint typed={botForm.minAllocation} money={money}/>}
+              <label className="input-label">Subscription price (USD)</label>
               <input className="text-input" type="number" step="0.01" min="0" placeholder="e.g. 19.00" value={botForm.subscriptionAmount} onChange={e => setBotForm({ ...botForm, subscriptionAmount: e.target.value })}/>
+              {currency !== "USD" && <StoredUsdHint typed={botForm.subscriptionAmount} money={money}/>}
               <label className="input-label">Subscription duration</label>
               <div className="select-wrap"><select value={botForm.subscriptionDurationDays} onChange={e => setBotForm({ ...botForm, subscriptionDurationDays: e.target.value })}>{SUBSCRIPTION_DURATION_OPTIONS.map(d => <option key={d} value={d}>{d} days</option>)}</select></div>
               <label className="input-label">Rating (0-5)</label>
@@ -1287,8 +1407,8 @@ function AdminPageInner() {
                   <textarea className="text-input" rows={3} value={editBotForm.description} onChange={e => setEditBotForm({ ...editBotForm, description: e.target.value })} maxLength={400}/>
                   <div className="select-wrap"><select value={editBotForm.strategy} onChange={e => setEditBotForm({ ...editBotForm, strategy: e.target.value as BotStrategy })}>{BOT_STRATEGIES.map(s => <option key={s} value={s}>{s}</option>)}</select></div>
                   <div className="select-wrap"><select value={editBotForm.riskLevel} onChange={e => setEditBotForm({ ...editBotForm, riskLevel: e.target.value as RiskLevel })}>{RISK_LEVELS.map(r => <option key={r} value={r}>{r}</option>)}</select></div>
-                  <input className="text-input" type="number" step="0.01" min="0" value={editBotForm.minAllocation} onChange={e => setEditBotForm({ ...editBotForm, minAllocation: e.target.value })} placeholder="Minimum allocation"/>
-                  <input className="text-input" type="number" step="0.01" min="0" value={editBotForm.subscriptionAmount} onChange={e => setEditBotForm({ ...editBotForm, subscriptionAmount: e.target.value })} placeholder="Subscription price"/>
+                  <input className="text-input" type="number" step="0.01" min="0" value={editBotForm.minAllocation} onChange={e => setEditBotForm({ ...editBotForm, minAllocation: e.target.value })} placeholder="Minimum allocation (USD)"/>
+                  <input className="text-input" type="number" step="0.01" min="0" value={editBotForm.subscriptionAmount} onChange={e => setEditBotForm({ ...editBotForm, subscriptionAmount: e.target.value })} placeholder="Subscription price (USD)"/>
                   <div className="select-wrap"><select value={editBotForm.subscriptionDurationDays} onChange={e => setEditBotForm({ ...editBotForm, subscriptionDurationDays: e.target.value })}>{SUBSCRIPTION_DURATION_OPTIONS.map(d => <option key={d} value={d}>{d} days</option>)}</select></div>
                   <input className="text-input" type="number" step="0.1" min="0" max="5" value={editBotForm.rating} onChange={e => setEditBotForm({ ...editBotForm, rating: e.target.value })} placeholder="Rating (0-5)"/>
                   <div className="select-wrap"><select value={editBotForm.country} onChange={e => setEditBotForm({ ...editBotForm, country: e.target.value })}>{COUNTRIES.map(c => <option key={c.code} value={c.code}>{c.flag} {c.name}</option>)}</select></div>
@@ -1321,8 +1441,9 @@ function AdminPageInner() {
               <input className="text-input" placeholder="e.g. Pro" value={planForm.name} onChange={e => setPlanForm({ ...planForm, name: e.target.value })} maxLength={60}/>
               <label className="input-label">Description</label>
               <textarea className="text-input" rows={2} placeholder="Short tagline for this plan" value={planForm.description} onChange={e => setPlanForm({ ...planForm, description: e.target.value })} maxLength={300}/>
-              <label className="input-label">Price per week ($)</label>
+              <label className="input-label">Price per week (USD)</label>
               <input className="text-input" type="number" step="0.01" min="0" placeholder="e.g. 15.00" value={planForm.priceWeekly} onChange={e => setPlanForm({ ...planForm, priceWeekly: e.target.value })}/>
+              {currency !== "USD" && <StoredUsdHint typed={planForm.priceWeekly} money={money}/>}
               <label className="input-label">Features (one per line)</label>
               <textarea className="text-input" rows={5} placeholder={"Trading bot subscriptions\nCopy trading subscriptions\nAdvanced market signals"} value={planForm.features} onChange={e => setPlanForm({ ...planForm, features: e.target.value })}/>
               <label className="input-label">Sort order</label>
@@ -1338,7 +1459,7 @@ function AdminPageInner() {
                 {editingPlanId === p.id ? <div className="admin-account-edit">
                   <input className="text-input" value={editPlanForm.name} onChange={e => setEditPlanForm({ ...editPlanForm, name: e.target.value })} maxLength={60}/>
                   <textarea className="text-input" rows={2} value={editPlanForm.description} onChange={e => setEditPlanForm({ ...editPlanForm, description: e.target.value })} maxLength={300}/>
-                  <input className="text-input" type="number" step="0.01" min="0" value={editPlanForm.priceWeekly} onChange={e => setEditPlanForm({ ...editPlanForm, priceWeekly: e.target.value })} placeholder="Price per week"/>
+                  <input className="text-input" type="number" step="0.01" min="0" value={editPlanForm.priceWeekly} onChange={e => setEditPlanForm({ ...editPlanForm, priceWeekly: e.target.value })} placeholder="Price per week (USD)"/>
                   <textarea className="text-input" rows={5} value={editPlanForm.features} onChange={e => setEditPlanForm({ ...editPlanForm, features: e.target.value })} placeholder="Features (one per line)"/>
                   <input className="text-input" type="number" step="1" value={editPlanForm.sortOrder} onChange={e => setEditPlanForm({ ...editPlanForm, sortOrder: e.target.value })} placeholder="Sort order"/>
                   <label className="checkbox-row"><input type="checkbox" checked={editPlanForm.isFeatured} onChange={e => setEditPlanForm({ ...editPlanForm, isFeatured: e.target.checked })}/> Featured (highlighted) plan</label>

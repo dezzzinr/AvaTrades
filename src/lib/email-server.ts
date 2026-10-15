@@ -74,7 +74,7 @@ export function notificationEmailHtml(input: { name: string; title: string; mess
       </table>
     </td></tr>
     <tr><td style="padding:16px 28px;background:#f9fafb;border-top:1px solid #f0f0f0;">
-      <span style="font-size:11px;color:#9ca3af;">You're receiving this because notable account activity notifications are on for your AvaTrades account. Turn these off anytime from Profile → Notifications. This is a paper-trading simulation - no real money is involved.</span>
+      <span style="font-size:11px;color:#9ca3af;">You're receiving this because notable account activity notifications are on for your AvaTrades account. Turn these off anytime from Profile → Notifications.  involved.</span>
     </td></tr>
   </table>
 </body>
@@ -109,7 +109,7 @@ export function passwordResetEmailHtml(input: { name: string; token: string }): 
       </table>
     </td></tr>
     <tr><td style="padding:16px 28px;background:#f9fafb;border-top:1px solid #f0f0f0;">
-      <span style="font-size:11px;color:#9ca3af;">This is a paper-trading simulation - no real money is involved.</span>
+      <span style="font-size:11px;color:#9ca3af;"></span>
     </td></tr>
   </table>
 </body>
@@ -141,7 +141,7 @@ export function verificationCodeEmailHtml(input: { name: string; code: string })
       </table>
     </td></tr>
     <tr><td style="padding:16px 28px;background:#f9fafb;border-top:1px solid #f0f0f0;">
-      <span style="font-size:11px;color:#9ca3af;">This is a paper-trading simulation - no real money is involved.</span>
+      <span style="font-size:11px;color:#9ca3af;"></span>
     </td></tr>
   </table>
 </body>

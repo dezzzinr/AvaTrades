@@ -3,12 +3,13 @@ import { db } from "@/db";
 import { holdings, orders, users } from "@/db/schema";
 import { and, desc, eq } from "drizzle-orm";
 import { getUser } from "@/lib/auth";
-import { getAsset, marketPrice } from "@/lib/market";
+import { getAsset } from "@/lib/market";
 import { getMarketSnapshot } from "@/lib/market-server";
 import { blockedActionMessage, tradeLimitMessage } from "@/lib/accounts";
 import { PENDING_ORDER_TYPES, allowedOrderTypesForSide, orderTypeLabel, spotOrderShouldFill, spotOrderFillPrice, normalizeDurationMinutes, formatDurationMinutes, MAX_DURATION_MINUTES, type PendingOrderType } from "@/lib/trading";
 import { evaluateOneOrder, reservedBuyCash, reservedSellQuantity } from "@/lib/trading-engine";
 import { notifyUser } from "@/lib/notify";
+import { moneyFormatterFor, convertToUsd, convertPriceToUsd, USD_ADVICE_USER } from "@/lib/fx-server";
 
 export const dynamic = "force-dynamic";
 const bad = (message: string, status = 400) => NextResponse.json({ error: message }, { status });
@@ -34,13 +35,22 @@ export async function POST(request: NextRequest) {
     if (!user) return bad("Session expired. Please refresh the page.", 401);
     const blocked = blockedActionMessage(user, "trade");
     if (blocked) return bad(blocked, 403);
+    // Formats every amount in this request's messages in the user's own
+    // display currency (chosen on their profile). Ledger math stays USD.
+    const fmt = await moneyFormatterFor(user.currency);
 
     const body = await request.json().catch(() => ({}));
     const symbol = String(body.symbol ?? "").toUpperCase();
     const side = body.side;
     const type = body.type as PendingOrderType;
-    const quantity = Number(body.quantity);
-    const triggerPrice = Number(body.triggerPrice);
+    // The trigger price is typed in the user's display currency (it's the level
+    // they read off the chart) and the amount they want to spend is typed in the
+    // same currency. Both are converted here, and quantity is DERIVED on the
+    // server from the converted values rather than trusting client-side math -
+    // a stale client rate would otherwise produce a wrong order size.
+    // `quantity` alone is still accepted for callers that don't send `amount`.
+    const enteredAmount = body.amount === undefined || body.amount === null || body.amount === "" ? null : Number(body.amount);
+    const enteredPrice = Number(body.triggerPrice);
     // Custom timer: a raw number of minutes (any value), not a fixed
     // preset - null/0/absent means "no expiry".
     if (body.durationMinutes !== undefined && body.durationMinutes !== null && body.durationMinutes !== "" && normalizeDurationMinutes(body.durationMinutes) === null) {
@@ -53,16 +63,32 @@ export async function POST(request: NextRequest) {
     if (!["buy", "sell"].includes(side)) return bad("Choose buy or sell.");
     if (!PENDING_ORDER_TYPES.includes(type)) return bad("Choose a valid order type.");
     if (!allowedOrderTypesForSide(side).includes(type)) return bad(`${orderTypeLabel(type)} orders are only available on the sell side.`);
+
+    const priceConversion = await convertPriceToUsd(enteredPrice, body.currency);
+    if (!priceConversion.ok) return bad(priceConversion.error);
+    const triggerPrice = priceConversion.usd;
+    if (triggerPrice > 100_000_000) return bad("Enter a valid price.");
+
+    let quantity: number;
+    if (enteredAmount !== null) {
+      const amountConversion = await convertToUsd(enteredAmount, body.currency, USD_ADVICE_USER);
+      if (!amountConversion.ok) return bad(amountConversion.error);
+      // Floor to 8dp, matching the schema's quantity precision and what the
+      // form previews, so the user never gets more exposure than they typed.
+      quantity = Math.floor((amountConversion.usd / triggerPrice) * 1e8) / 1e8;
+      if (!quantity) return bad("Amount is too small for this asset at that price.");
+    } else {
+      quantity = Number(body.quantity);
+    }
     if (!Number.isFinite(quantity) || quantity <= 0 || quantity > 1_000_000 || (quantity.toString().split(".")[1]?.length ?? 0) > 8) return bad("Enter a valid quantity.");
-    if (!Number.isFinite(triggerPrice) || triggerPrice <= 0 || triggerPrice > 100_000_000) return bad("Enter a valid price.");
 
     const market = await getMarketSnapshot();
     const asset = market.assets.find((item) => item.symbol === symbol);
     if (market.status !== "live" || !asset || asset.price <= 0) return bad("Live market pricing is unavailable. Orders can't be placed until prices recover.", 503);
 
     const total = Math.round(quantity * triggerPrice * 100) / 100;
-    if (total < 0.01) return bad("Minimum order value is $0.01.");
-    const limitMsg = tradeLimitMessage(user, total);
+    if (total < 0.01) return bad(`Minimum order value is ${fmt.usd(0.01)}.`);
+    const limitMsg = tradeLimitMessage(user, total, fmt.usd);
     if (limitMsg) return bad(limitMsg, 403);
 
     const orderId = await db.transaction(async (tx) => {
@@ -73,7 +99,7 @@ export async function POST(request: NextRequest) {
         const available = Number(wallet.cashBalance) - reserved;
         if (total > available + 0.0001) {
           throw new Error(reserved > 0
-            ? `Insufficient available balance — $${reserved.toFixed(2)} is already committed to other open buy orders.`
+            ? `Insufficient available balance — ${fmt.money(reserved)} is already committed to other open buy orders.`
             : "Insufficient available balance.");
         }
       } else {
@@ -117,7 +143,7 @@ export async function POST(request: NextRequest) {
         userId: user.id,
         type: "order_placed",
         title: `${orderTypeLabel(type)} order placed`,
-        message: `Your ${orderTypeLabel(type).toLowerCase()} order to ${side} ${quantity} ${symbol} at ${marketPrice(triggerPrice)} is open and will fill automatically when the market reaches that price.${expiryNote}`,
+        message: `Your ${orderTypeLabel(type).toLowerCase()} order to ${side} ${quantity} ${symbol} at ${fmt.marketPrice(triggerPrice)} is open and will fill automatically when the market reaches that price.${expiryNote}`,
       });
     }
 
@@ -125,8 +151,8 @@ export async function POST(request: NextRequest) {
       success: true,
       filled,
       message: filled
-        ? `${side === "buy" ? "Bought" : "Sold"} ${quantity} ${symbol} at ${marketPrice(fillPrice)} (filled immediately).`
-        : `${orderTypeLabel(type)} order placed: ${side} ${quantity} ${symbol} at ${marketPrice(triggerPrice)}${expiresAt ? ` (expires in ${formatDurationMinutes(durationMinutes!)})` : ""}.`,
+        ? `${side === "buy" ? "Bought" : "Sold"} ${quantity} ${symbol} at ${fmt.marketPrice(fillPrice)} (filled immediately).`
+        : `${orderTypeLabel(type)} order placed: ${side} ${quantity} ${symbol} at ${fmt.marketPrice(triggerPrice)}${expiresAt ? ` (expires in ${formatDurationMinutes(durationMinutes!)})` : ""}.`,
     });
   } catch (error) {
     console.error("Orders POST:", error);

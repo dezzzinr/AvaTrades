@@ -3,8 +3,9 @@ import { db } from "@/db";
 import { users, holdings, trades } from "@/db/schema";
 import { and, eq, sql } from "drizzle-orm";
 import { requireAdmin } from "@/lib/auth";
-import { getAsset, marketPrice } from "@/lib/market";
+import { getAsset } from "@/lib/market";
 import { getMarketSnapshot } from "@/lib/market-server";
+import { moneyFormatterFor, convertPriceToUsd } from "@/lib/fx-server";
 
 export const dynamic = "force-dynamic";
 const bad = (message: string, status = 400) => NextResponse.json({ error: message }, { status });
@@ -19,6 +20,9 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
   try {
     const admin = await requireAdmin(request);
     if (!admin) return bad("Admin access required.", 403);
+    // Confirmation text goes back to the admin, so it's formatted in the
+    // admin's own display currency. Ledger values stay USD.
+    const fmt = await moneyFormatterFor(admin.currency);
     const { id } = await params;
     const [target] = await db.select({ id: users.id }).from(users).where(eq(users.id, id)).limit(1);
     if (!target) return bad("User not found.", 404);
@@ -27,13 +31,25 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
     const symbol = String(body.symbol ?? "").toUpperCase();
     const side = body.side;
     const quantity = Number(body.quantity);
-    const priceOverride = body.price === undefined || body.price === null || body.price === "" ? null : Number(body.price);
     const adminNote = body.note ? String(body.note).trim().slice(0, 300) : null;
 
     if (!getAsset(symbol)) return bad("Choose a valid asset.");
     if (!["buy", "sell"].includes(side)) return bad("Choose buy or sell.");
     if (!Number.isFinite(quantity) || quantity <= 0 || quantity > 1000000 || (quantity.toString().split(".")[1]?.length ?? 0) > 8) return bad("Enter a valid trade quantity.");
-    if (priceOverride !== null && (!Number.isFinite(priceOverride) || priceOverride <= 0 || priceOverride > 100000000)) return bad("Enter a valid override price.");
+
+    // The optional fill price is typed in the admin's own display currency -
+    // every price in the admin panel renders converted, so an admin reading a
+    // figure off the screen and typing it back would otherwise be double
+    // converted. Trades store USD price levels, so convert it here.
+    const enteredPrice = body.price === undefined || body.price === null || body.price === "" ? null : Number(body.price);
+    let priceOverride: number | null = null;
+    if (enteredPrice !== null) {
+      if (!Number.isFinite(enteredPrice) || enteredPrice <= 0) return bad("Enter a valid override price.");
+      const converted = await convertPriceToUsd(enteredPrice, body.currency);
+      if (!converted.ok) return bad(converted.error);
+      if (converted.usd > 100000000) return bad("Enter a valid override price.");
+      priceOverride = converted.usd;
+    }
 
     let fillPrice = priceOverride;
     if (fillPrice === null) {
@@ -43,7 +59,7 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
       fillPrice = asset.price;
     }
     const total = Math.round(quantity * fillPrice * 100) / 100;
-    if (total < 0.01) return bad("Minimum trade value is $0.01.");
+    if (total < 0.01) return bad(`Minimum trade value is ${fmt.usd(0.01)}.`);
 
     await db.transaction(async (tx) => {
       const [wallet] = await tx.select().from(users).where(eq(users.id, id)).for("update");
@@ -67,7 +83,7 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
       await tx.insert(trades).values({ userId: id, symbol, side, quantity: quantity.toFixed(8), price: fillPrice.toFixed(8), total: total.toFixed(2), placedBy: admin.id, adminNote });
     });
 
-    return NextResponse.json({ success: true, price: fillPrice, total, message: `${side === "buy" ? "Bought" : "Sold"} ${quantity} ${symbol} at ${marketPrice(fillPrice)} on behalf of this user.` });
+    return NextResponse.json({ success: true, price: fillPrice, total, message: `${side === "buy" ? "Bought" : "Sold"} ${quantity} ${symbol} at ${fmt.marketPrice(fillPrice)} on behalf of this user.` });
   } catch (error) {
     console.error("Admin place trade:", error);
     return bad(error instanceof Error ? error.message : "Unable to place this trade.", 400);

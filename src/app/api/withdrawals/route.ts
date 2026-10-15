@@ -6,6 +6,7 @@ import { getUser } from "@/lib/auth";
 import { blockedActionMessage } from "@/lib/accounts";
 import { WITHDRAWAL_METHOD_IDS } from "@/lib/withdrawals";
 import { notifyUser } from "@/lib/notify";
+import { moneyFormatterFor, convertToUsd, USD_ADVICE_USER } from "@/lib/fx-server";
 
 export const dynamic = "force-dynamic";
 const bad = (message: string, status = 400) => NextResponse.json({ error: message }, { status });
@@ -38,6 +39,9 @@ export async function POST(request: NextRequest) {
     if (!user) return bad("Session expired. Please refresh the page.", 401);
     const blocked = blockedActionMessage(user, "withdraw");
     if (blocked) return bad(blocked, 403);
+    // Formats every amount in this request's messages in the user's own
+    // display currency (chosen on their profile). Ledger math stays USD.
+    const fmt = await moneyFormatterFor(user.currency);
     const body = await request.json().catch(() => null);
     if (!body || typeof body !== "object") return bad("Invalid request.");
 
@@ -46,9 +50,17 @@ export async function POST(request: NextRequest) {
     const methodLabel = method === "other" ? String(body.methodLabel ?? "").trim().slice(0, 60) : null;
     if (method === "other" && methodLabel !== null && methodLabel.length < 2) return bad("Tell us the name of the platform you'd like to be paid through.");
 
-    const amount = Number(body.amount);
-    const validAmount = Number.isFinite(amount) && amount > 0 && amount <= 10000000 && Math.abs(Math.round(amount * 100) - amount * 100) < 0.000001;
-    if (!validAmount || amount < 1) return bad("Enter a valid amount of at least $1.");
+    // Typed in the user's own display currency; converted to the USD ledger
+    // here on the server (never trusting a client-computed figure). Bounds and
+    // the balance check apply to the converted USD value, since that's what the
+    // wallet actually holds.
+    const entered = Number(body.amount);
+    if (!Number.isFinite(entered) || entered <= 0) return bad(`Enter a valid amount of at least ${fmt.usd(1)}.`);
+    const conversion = await convertToUsd(entered, body.currency, USD_ADVICE_USER);
+    if (!conversion.ok) return bad(conversion.error);
+    const amount = conversion.usd;
+    if (amount < 1) return bad(`Enter a valid amount of at least ${fmt.usd(1)}.`);
+    if (amount > 10000000) return bad("Enter a smaller amount.");
 
     const destination = String(body.destination ?? "").trim().slice(0, 500);
     if (destination.length < 3) return bad("Tell us where to send your payout (wallet address, account details, email, etc.).");
@@ -70,7 +82,7 @@ export async function POST(request: NextRequest) {
       userId: user.id,
       type: "withdrawal_submitted",
       title: "Withdrawal request submitted",
-      message: `Your $${amount.toFixed(2)} withdrawal request via ${method} was submitted and is awaiting admin review. The amount has been reserved from your available balance.`,
+      message: `Your ${fmt.money(amount)} withdrawal request via ${method} was submitted and is awaiting admin review. The amount has been reserved from your available balance.`,
     });
 
     return NextResponse.json({ success: true, id, message: "Withdrawal request submitted for review. The amount has been reserved from your available balance." });

@@ -5,6 +5,7 @@ import { and, desc, eq, gt } from "drizzle-orm";
 import { getUser } from "@/lib/auth";
 import { blockedActionMessage } from "@/lib/accounts";
 import { getAsset } from "@/lib/market";
+import { moneyFormatterFor, convertToUsd, USD_ADVICE_USER } from "@/lib/fx-server";
 
 export const dynamic = "force-dynamic";
 const bad = (message: string, status = 400) => NextResponse.json({ error: message }, { status });
@@ -61,14 +62,28 @@ export async function POST(request: NextRequest) {
     const body = await request.json().catch(() => ({}));
     const botProductId = String(body.botProductId ?? "");
     const symbol = String(body.symbol ?? "").toUpperCase();
-    const amount = Number(body.amount);
 
     const [product] = await db.select().from(botProducts).where(eq(botProducts.id, botProductId)).limit(1);
     if (!product) return bad("Bot not found.");
     if (!(await hasActiveSubscription(user.id, botProductId))) return bad(`Subscribe to ${product.name} first to configure it.`);
     if (!getAsset(symbol)) return bad("Choose a valid asset to trade.");
+
+    // The allocation is typed in the user's own display currency and stored in
+    // the USD ledger. The product's minAllocation is a USD figure, so the check
+    // compares against the converted amount - not what the user typed.
+    const entered = Number(body.amount);
+    if (!Number.isFinite(entered) || entered <= 0) {
+      const fmt = await moneyFormatterFor(user.currency);
+      return bad(`Enter an allocation of at least ${fmt.usd(Number(product.minAllocation))}.`);
+    }
+    const conversion = await convertToUsd(entered, body.currency, USD_ADVICE_USER);
+    if (!conversion.ok) return bad(conversion.error);
+    const amount = conversion.usd;
     const minAllocation = Number(product.minAllocation);
-    if (!Number.isFinite(amount) || amount < minAllocation) return bad(`Enter an allocation of at least $${minAllocation.toFixed(2)}.`);
+    if (amount < minAllocation) {
+      const fmt = await moneyFormatterFor(user.currency);
+      return bad(`Enter an allocation of at least ${fmt.usd(minAllocation)}.`);
+    }
     if (amount > 10000000) return bad("Enter a smaller allocation amount.");
 
     const name = String(body.name ?? "").trim().slice(0, 80) || `${product.name} · ${symbol}`;

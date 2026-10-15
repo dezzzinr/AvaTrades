@@ -3,7 +3,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { Activity, AlertTriangle, ArrowDownLeft, ArrowDownRight, ArrowLeftRight, ArrowRight, ArrowUpRight, Bell, BellRing, Bot, CalendarDays, Check, CheckCircle2, ChevronDown, ChevronLeft, ChevronRight, CircleHelp, Clock3, Copy, CreditCard, Download, Eye, EyeOff, FileText, Gift, Globe, Hourglass, History, LayoutDashboard, LockKeyhole, LogOut, Mail, Menu, MoreHorizontal, Paperclip, Plus, RefreshCw, Search, Settings2, ShieldCheck, Signal, SlidersHorizontal, Sparkles, Star, Moon, Sun, Target, Trash2, TrendingDown, TrendingUp, UploadCloud, UserRound, UsersRound, Wallet, WandSparkles, X, XCircle, Zap } from "lucide-react";
 import { assets as catalogAssets, getAsset as getCatalogAsset, type Asset, type Candle, type ChartPoint, type ChartPeriod, type MarketSnapshot } from "@/lib/market";
-import { formatMoney, formatMarketPrice, formatCompactMoney } from "@/lib/currency";
+import { formatMoney, formatMarketPrice, formatCompactMoney, formatUsdAmount, formatInCurrency, currencySymbol } from "@/lib/currency";
 import { DEPOSIT_METHODS, MAX_RECEIPT_BYTES, type DepositMethod } from "@/lib/deposits";
 import { WITHDRAWAL_METHODS, type WithdrawalMethod } from "@/lib/withdrawals";
 import { ORDER_TYPES, LEVERAGE_OPTIONS, MIN_MARGIN, DURATION_PRESETS, DURATION_UNITS, MIN_DURATION_MINUTES, minutesPerUnit, formatDurationMinutes, allowedOrderTypesForSide, liquidationPrice, orderTypeLabel, positionPnl, closeReasonLabel, type OrderType, type PositionSide, type DurationUnitId } from "@/lib/trading";
@@ -86,6 +86,54 @@ function HomePageInner() {
   const money = (value: number, digits = 2) => formatMoney(value, currency, fxRate, digits);
   const marketPrice = (value: number) => formatMarketPrice(value, currency, fxRate);
   const compactMoney = (value: number) => formatCompactMoney(value, currency, fxRate);
+  // For thresholds defined in USD (minimum margin, minimum order value): shows
+  // the USD figure, plus its converted equivalent so it lines up with
+  // everything else on screen.
+  const usdAmount = (value: number, digits = 2) => formatUsdAmount(value, currency, fxRate, digits);
+
+  // --- Typing in your own currency -------------------------------------
+  // Amount and price fields are entered in the user's display currency - the
+  // same one every balance, chart and price on the page already uses - and the
+  // API route converts to the USD ledger authoritatively. These helpers only
+  // drive labels, placeholders and the "≈ $X" preview; they never decide
+  // what gets stored, and the server re-does every conversion itself.
+  const inputSymbol = currencySymbol(currency);
+  // False when the provider has no usable rate for this currency. Amounts must
+  // not be typed in it then: the server would (correctly) refuse the request,
+  // because guessing a rate would mis-state real money.
+  const fxUsable = currency === "USD" || data.fx?.status === "live" || data.fx?.status === "stale";
+  // The USD value of a figure typed into a field. Previews and confirm dialogs
+  // use this so they agree with what the server will store.
+  const usdOf = (typed: string | number) => {
+    const value = Number(typed);
+    if (!Number.isFinite(value)) return 0;
+    return currency === "USD" ? value : value / fxRate;
+  };
+  // Echoes exactly what's in the field, in the user's currency and with no
+  // conversion - so a confirm dialog never shows a number that drifts from the
+  // one still on screen.
+  const typedMoney = (typed: string | number) => formatInCurrency(Number(typed) || 0, currency);
+  // "≈ $1,000.00 USD" - what the typed figure will be stored as. Preview only,
+  // and pointless (so suppressed) when they're already typing in USD.
+  const usdPreview = (typed: string) => {
+    const value = Number(typed);
+    if (currency === "USD" || !fxUsable || !Number.isFinite(value) || value <= 0) return null;
+    return `≈ ${formatMoney(value / fxRate, "USD", 1)} USD`;
+  };
+  // The hint line under an amount field: normally the USD equivalent of what's
+  // typed, but when the provider has no usable rate for this currency it warns
+  // instead - the server would refuse the request, so the user should know
+  // before they press the button rather than after.
+  const amountHint = (typed: string) => {
+    const preview = usdPreview(typed);
+    if (preview) return <p className="form-hint">{preview}</p>;
+    if (!fxUsable && Number(typed) > 0) return <p className="form-hint" style={{ color: "var(--tint-red-fg)", display: "flex", alignItems: "center", gap: 5 }}><AlertTriangle size={13}/> Rates for {currency} are unavailable, so this can&apos;t be converted yet. Switch your display currency to USD to continue.</p>;
+    return null;
+  };
+  // A USD constant (a minimum, a live market price) expressed as a plain number
+  // in the user's currency - for input placeholders and HTML min attributes,
+  // where a formatted symbol string wouldn't be valid.
+  const inMyCurrency = (usdValue: number, decimals = 2) => String(Number((usdValue * (currency === "USD" ? 1 : fxRate)).toFixed(decimals)));
   // Remember which tab the user was on across browser refreshes - previously
   // every reload silently dumped everyone back to Overview, which felt like
   // the whole app "started over" even though their data was untouched.
@@ -402,10 +450,10 @@ function HomePageInner() {
     if (!receiptFile) return notify("Attach a receipt or screenshot of your payment.", true);
     const amount = Number(depositAmount);
     if (!amount || amount <= 0) return notify("Enter a valid deposit amount.", true);
-    if (!(await confirm({ title: "Submit this deposit request?", message: `We'll review your ${money(amount)} deposit and credit it to your balance once your payment is verified.`, confirmLabel: "Submit request" }))) return;
+    if (!(await confirm({ title: "Submit this deposit request?", message: `We'll review your ${typedMoney(depositAmount)} deposit and credit it to your balance once your payment is verified.`, confirmLabel: "Submit request" }))) return;
     setDepositSubmitting(true);
     try {
-      const res = await fetch("/api/deposits", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ method: depositMethod, amount, depositAccountId: depositAccountId || null, reference: depositReference, note: depositNote, receipt: receiptFile.dataUrl, receiptFilename: receiptFile.name }) });
+      const res = await fetch("/api/deposits", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ method: depositMethod, amount, currency, depositAccountId: depositAccountId || null, reference: depositReference, note: depositNote, receipt: receiptFile.dataUrl, receiptFilename: receiptFile.name }) });
       const result = await res.json();
       if (!res.ok) throw new Error(result.error || "Something went wrong");
       notify(result.message || "Deposit request submitted");
@@ -450,18 +498,20 @@ function HomePageInner() {
     const orderDurationMinutes = computeDurationMinutes(orderDurationOn, orderDurationAmount, orderDurationUnit);
     if (orderType === "market") {
       if (!quoteLive || currentAsset.price <= 0) return notify("Live quotes are unavailable. Live trading is paused.", true);
-      const usd = Number(tradeAmount);
-      if (!usd || usd <= 0) return notify("Enter a valid USD amount", true);
+      // tradeAmount is typed in the user's own currency; the server converts
+      // it to the USD ledger and derives the quantity from its own live price.
+      const typed = Number(tradeAmount);
+      if (!typed || typed <= 0) return notify("Enter a valid amount", true);
       // A market order with a duration set doesn't land in holdings - it
       // opens as a 1x (no leverage amplification) position instead, which
       // automatically closes and realizes P&L once the timer is up, just
       // like a leveraged position's duration expiry.
       if (orderDurationMinutes) {
         if (loading) return;
-        if (!(await confirm({ title: `${side === "buy" ? "Buy" : "Sell"} ${symbol} for ${formatDurationMinutes(orderDurationMinutes)}?`, message: `This opens a timed ${side === "buy" ? "long" : "short"} trade on ${symbol} with ${money(usd)} at the live market price. It automatically closes and realizes your profit/loss after ${formatDurationMinutes(orderDurationMinutes)}, unless you close it sooner.`, confirmLabel: side === "buy" ? "Buy now" : "Sell now" }))) return;
+        if (!(await confirm({ title: `${side === "buy" ? "Buy" : "Sell"} ${symbol} for ${formatDurationMinutes(orderDurationMinutes)}?`, message: `This opens a timed ${side === "buy" ? "long" : "short"} trade on ${symbol} with ${typedMoney(tradeAmount)} at the live market price. It automatically closes and realizes your profit/loss after ${formatDurationMinutes(orderDurationMinutes)}, unless you close it sooner.`, confirmLabel: side === "buy" ? "Buy now" : "Sell now" }))) return;
         setLoading(true);
         try {
-          const res = await fetch("/api/positions", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ symbol, side: side === "buy" ? "long" : "short", leverage: 1, margin: usd, durationMinutes: orderDurationMinutes }) });
+          const res = await fetch("/api/positions", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ symbol, side: side === "buy" ? "long" : "short", leverage: 1, margin: typed, currency, durationMinutes: orderDurationMinutes }) });
           const result = await res.json();
           if (!res.ok) throw new Error(result.error || "Something went wrong");
           notify(result.message || "Trade opened");
@@ -470,25 +520,28 @@ function HomePageInner() {
         } catch (error) { notify(error instanceof Error ? error.message : "Something went wrong", true); } finally { setLoading(false); }
         return;
       }
-      const quantity = Math.floor((usd / currentAsset.price) * 1e8) / 1e8;
+      const quantity = Math.floor((usdOf(tradeAmount) / currentAsset.price) * 1e8) / 1e8;
       if (!quantity) return notify("Amount is too small for this asset", true);
-      if (!(await confirm({ title: `${side === "buy" ? "Buy" : "Sell"} ${symbol}?`, message: `This will ${side} ${quantity} ${symbol} (~${money(usd)}) at the live market price.`, confirmLabel: side === "buy" ? "Buy now" : "Sell now" }))) return;
-      const ok = await action({ action: "trade", symbol, side, quantity });
+      if (!(await confirm({ title: `${side === "buy" ? "Buy" : "Sell"} ${symbol}?`, message: `This will ${side} about ${quantity} ${symbol} (~${typedMoney(tradeAmount)}) at the live market price.`, confirmLabel: side === "buy" ? "Buy now" : "Sell now" }))) return;
+      const ok = await action({ action: "trade", symbol, side, amount: typed, currency });
       if (ok) { setTradeAmount(""); void refreshMarket(); void loadMyOrders(); }
       return;
     }
     if (!quoteLive) return notify("Live quotes are unavailable. Live trading is paused.", true);
+    // Both the trigger price and the amount are typed in the user's currency.
+    // The quantity below is a preview only - the server converts both values
+    // and derives the real order size itself.
     const price = Number(orderPrice);
     if (!price || price <= 0) return notify("Enter a valid price.", true);
-    const usd = Number(tradeAmount);
-    if (!usd || usd <= 0) return notify("Enter a valid USD amount", true);
-    const quantity = Math.floor((usd / price) * 1e8) / 1e8;
+    const typed = Number(tradeAmount);
+    if (!typed || typed <= 0) return notify("Enter a valid amount", true);
+    const quantity = Math.floor((usdOf(tradeAmount) / usdOf(orderPrice)) * 1e8) / 1e8;
     if (!quantity) return notify("Amount is too small for this asset", true);
     if (loading) return;
-    if (!(await confirm({ title: `Place ${orderTypeLabel(orderType)} order?`, message: `${side === "buy" ? "Buy" : "Sell"} ${quantity} ${symbol} (~${money(usd)}) when the price reaches $${price.toLocaleString()}. You can cancel it anytime before it fills.`, confirmLabel: "Place order" }))) return;
+    if (!(await confirm({ title: `Place ${orderTypeLabel(orderType)} order?`, message: `${side === "buy" ? "Buy" : "Sell"} about ${quantity} ${symbol} (~${typedMoney(tradeAmount)}) when the price reaches ${marketPrice(usdOf(price))}. You can cancel it anytime before it fills.`, confirmLabel: "Place order" }))) return;
     setLoading(true);
     try {
-      const res = await fetch("/api/orders", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ symbol, side, type: orderType, quantity, triggerPrice: price, durationMinutes: orderDurationMinutes }) });
+      const res = await fetch("/api/orders", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ symbol, side, type: orderType, amount: typed, currency, triggerPrice: price, durationMinutes: orderDurationMinutes }) });
       const result = await res.json();
       if (!res.ok) throw new Error(result.error || "Something went wrong");
       notify(result.message || "Order placed");
@@ -513,12 +566,13 @@ function HomePageInner() {
     if (!requireRealAccount()) return;
     if (!quoteLive) return notify("Live quotes are unavailable. Live trading is paused.", true);
     const margin = Number(marginAmount);
-    if (!margin || margin < MIN_MARGIN) return notify(`Enter a margin amount of at least $${MIN_MARGIN}.`, true);
+    // MIN_MARGIN is a USD floor; the field holds the user's currency.
+    if (!margin || usdOf(margin) < MIN_MARGIN) return notify(`Enter a margin amount of at least ${usdAmount(MIN_MARGIN)}.`, true);
     if (openingPosition) return;
-    if (!(await confirm({ title: `Open ${leverageX}x ${positionSide} position?`, message: `Posting ${money(margin)} margin on ${symbol} at ${leverageX}x leverage. You can lose up to your full margin if the price moves against you, including automatic liquidation.`, confirmLabel: "Open position", danger: leverageX >= 20 }))) return;
+    if (!(await confirm({ title: `Open ${leverageX}x ${positionSide} position?`, message: `Posting ${typedMoney(marginAmount)} margin on ${symbol} at ${leverageX}x leverage. You can lose up to your full margin if the price moves against you, including automatic liquidation.`, confirmLabel: "Open position", danger: leverageX >= 20 }))) return;
     setOpeningPosition(true);
     try {
-      const res = await fetch("/api/positions", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ symbol, side: positionSide, leverage: leverageX, margin, takeProfitPrice: positionTP || null, stopLossPrice: positionSL || null, durationMinutes: computeDurationMinutes(positionDurationOn, positionDurationAmount, positionDurationUnit) }) });
+      const res = await fetch("/api/positions", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ symbol, side: positionSide, leverage: leverageX, margin, currency, takeProfitPrice: positionTP || null, stopLossPrice: positionSL || null, durationMinutes: computeDurationMinutes(positionDurationOn, positionDurationAmount, positionDurationUnit) }) });
       const result = await res.json();
       if (!res.ok) throw new Error(result.error || "Something went wrong");
       notify(result.message || "Position opened");
@@ -526,7 +580,7 @@ function HomePageInner() {
       await Promise.all([loadMyPositions(), refresh()]);
     } catch (error) { notify(error instanceof Error ? error.message : "Something went wrong", true); } finally { setOpeningPosition(false); }
   };
-  const quickTrade = async (e: React.FormEvent) => { e.preventDefault(); if (!requireRealAccount()) return; if (!quoteLive || currentAsset.price <= 0) return notify("Live quotes are unavailable. Live trading is paused.", true); const usd = Number(tradeAmount); if (!usd || usd <= 0) return notify("Enter a valid USD amount", true); const quantity = Math.floor((usd / currentAsset.price) * 1e8) / 1e8; if (!quantity) return notify("Amount is too small for this asset", true); if (!(await confirm({ title: `${side === "buy" ? "Buy" : "Sell"} ${symbol}?`, message: `This will ${side} ${quantity} ${symbol} (~${money(usd)}) at the live market price.`, confirmLabel: side === "buy" ? "Buy now" : "Sell now" }))) return; const ok = await action({ action: "trade", symbol, side, quantity }); if (ok) { setTradeAmount(""); void refreshMarket(); } };
+  const quickTrade = async (e: React.FormEvent) => { e.preventDefault(); if (!requireRealAccount()) return; if (!quoteLive || currentAsset.price <= 0) return notify("Live quotes are unavailable. Live trading is paused.", true); const typed = Number(tradeAmount); if (!typed || typed <= 0) return notify("Enter a valid amount", true); const quantity = Math.floor((usdOf(tradeAmount) / currentAsset.price) * 1e8) / 1e8; if (!quantity) return notify("Amount is too small for this asset", true); if (!(await confirm({ title: `${side === "buy" ? "Buy" : "Sell"} ${symbol}?`, message: `This will ${side} about ${quantity} ${symbol} (~${typedMoney(tradeAmount)}) at the live market price.`, confirmLabel: side === "buy" ? "Buy now" : "Sell now" }))) return; const ok = await action({ action: "trade", symbol, side, amount: typed, currency }); if (ok) { setTradeAmount(""); void refreshMarket(); } };
   const closePosition = async (id: string) => {
     if (closingPositionId) return;
     if (!(await confirm({ title: "Close this position?", message: "This realizes its current profit or loss immediately and returns remaining margin to your cash balance." }))) return;
@@ -571,10 +625,10 @@ function HomePageInner() {
     const target = Number(alertTargetPrice);
     if (!target || target <= 0) return notify("Enter a valid target price.", true);
     if (creatingAlert) return;
-    if (!(await confirm({ title: "Create this price alert?", message: `We'll notify you the moment ${symbol} goes ${alertDirection} $${target.toLocaleString()}.`, confirmLabel: "Create alert" }))) return;
+    if (!(await confirm({ title: "Create this price alert?", message: `We'll notify you the moment ${symbol} goes ${alertDirection} ${marketPrice(usdOf(target))}.`, confirmLabel: "Create alert" }))) return;
     setCreatingAlert(true);
     try {
-      const res = await fetch("/api/price-alerts", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ symbol, direction: alertDirection, targetPrice: target }) });
+      const res = await fetch("/api/price-alerts", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ symbol, direction: alertDirection, targetPrice: target, currency }) });
       const result = await res.json();
       if (!res.ok) throw new Error(result.error || "Something went wrong");
       notify(result.message || "Price alert created");
@@ -677,17 +731,18 @@ function HomePageInner() {
   const openConfigureBot = (bot: TradingBot) => {
     setConfiguringBotId(configuringBotId === bot.id ? null : bot.id);
     setNewInstanceSymbol("BTC");
-    setNewInstanceAmount(bot.minAllocation);
+    setNewInstanceAmount(inMyCurrency(Number(bot.minAllocation)));
     setNewInstanceName("");
   };
   const createBotInstance = async (bot: TradingBot) => {
     if (instanceCreating) return;
     const amount = Number(newInstanceAmount);
-    if (!amount || amount < Number(bot.minAllocation)) return notify(`Enter an allocation of at least ${money(Number(bot.minAllocation))}.`, true);
-    if (!(await confirm({ title: `Configure this ${bot.name} instance?`, message: `It will track ${newInstanceSymbol} with an allocation of ${money(amount)}.`, confirmLabel: "Configure bot" }))) return;
+    // minAllocation is a USD figure; the field holds the user's currency.
+    if (!amount || usdOf(amount) < Number(bot.minAllocation)) return notify(`Enter an allocation of at least ${money(Number(bot.minAllocation))}.`, true);
+    if (!(await confirm({ title: `Configure this ${bot.name} instance?`, message: `It will track ${newInstanceSymbol} with an allocation of ${typedMoney(newInstanceAmount)}.`, confirmLabel: "Configure bot" }))) return;
     setInstanceCreating(true);
     try {
-      const res = await fetch("/api/bot-instances", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ botProductId: bot.id, symbol: newInstanceSymbol, amount, name: newInstanceName }) });
+      const res = await fetch("/api/bot-instances", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ botProductId: bot.id, symbol: newInstanceSymbol, amount, currency, name: newInstanceName }) });
       const result = await res.json();
       if (!res.ok) throw new Error(result.error || "Something went wrong");
       notify(result.message || "Bot configured");
@@ -740,13 +795,16 @@ function HomePageInner() {
     if (withdrawalSubmitting) return;
     const amount = Number(withdrawalAmount);
     if (!amount || amount <= 0) return notify("Enter a valid withdrawal amount.", true);
-    if (amount > data.user.cashBalance) return notify("You can't request more than your available balance.", true);
+    // The field holds the user's own currency but cashBalance is the USD
+    // ledger, so compare like with like - otherwise a NGN user was told they
+    // could withdraw 1,331x their actual balance.
+    if (usdOf(amount) > data.user.cashBalance) return notify("You can't request more than your available balance.", true);
     if (withdrawalDestination.trim().length < 3) return notify("Tell us where to send your payout.", true);
     if (withdrawalMethod === "other" && withdrawalMethodLabelInput.trim().length < 2) return notify("Tell us the name of the platform you'd like to be paid through.", true);
-    if (!(await confirm({ title: "Submit this withdrawal request?", message: `${money(amount)} will be held from your available balance right away and paid out to the destination you provided once an admin reviews it.`, confirmLabel: "Submit request" }))) return;
+    if (!(await confirm({ title: "Submit this withdrawal request?", message: `${typedMoney(withdrawalAmount)} will be held from your available balance right away and paid out to the destination you provided once an admin reviews it.`, confirmLabel: "Submit request" }))) return;
     setWithdrawalSubmitting(true);
     try {
-      const res = await fetch("/api/withdrawals", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ method: withdrawalMethod, methodLabel: withdrawalMethodLabelInput, amount, destination: withdrawalDestination, note: withdrawalNote }) });
+      const res = await fetch("/api/withdrawals", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ method: withdrawalMethod, methodLabel: withdrawalMethodLabelInput, amount, currency, destination: withdrawalDestination, note: withdrawalNote }) });
       const result = await res.json();
       if (!res.ok) throw new Error(result.error || "Something went wrong");
       notify(result.message || "Withdrawal request submitted");
@@ -771,10 +829,10 @@ function HomePageInner() {
     <div className="segmented full"><button type="button" className={side === "buy" ? "active buy-active" : ""} onClick={() => setSide("buy")}>Buy</button><button type="button" className={side === "sell" ? "active sell-active" : ""} onClick={() => setSide("sell")}>Sell</button></div>
     <label className="input-label">Select asset</label>
     <div className="select-wrap"><AssetIcon asset={currentAsset} size={26}/><select value={symbol} onChange={e => setSymbol(e.target.value)}>{assets.map(a => <option key={a.symbol} value={a.symbol}>{a.name} ({a.symbol})</option>)}</select><ChevronDown size={16}/></div>
-    <label className="input-label">Amount in USD</label>
-    <div className="amount-input"><span>$</span><input type="number" min="0.01" step="0.01" placeholder="0.00" value={tradeAmount} onChange={e => setTradeAmount(e.target.value)} required/><span>USD</span></div>
-    {currency !== "USD" && tradeAmount && Number(tradeAmount) > 0 && <p className="form-hint">≈ {money(Number(tradeAmount))}</p>}
-    <div className="trade-details"><div><span>Indicative market price</span><strong>{marketPrice(currentAsset.price)}</strong></div><div><span>You'll {side === "buy" ? "receive" : "sell"}</span><strong>≈ {tradeAmount && currentAsset.price > 0 ? fmtQty(Math.floor((Number(tradeAmount) / currentAsset.price) * 1e8) / 1e8) : "0"} {symbol}</strong></div><div><span>Available</span><strong>{side === "buy" ? money(data.user.cashBalance) : `${fmtQty(Number(data.holdings.find(h => h.symbol === symbol)?.quantity ?? 0))} ${symbol}`}</strong></div></div>
+    <label className="input-label">Amount in {currency}</label>
+    <div className="amount-input"><span>{inputSymbol}</span><input type="number" min={inMyCurrency(0.01)} step="0.01" placeholder="0.00" value={tradeAmount} onChange={e => setTradeAmount(e.target.value)} required/><span>{currency}</span></div>
+    {amountHint(tradeAmount)}
+    <div className="trade-details"><div><span>Indicative market price</span><strong>{marketPrice(currentAsset.price)}</strong></div><div><span>You'll {side === "buy" ? "receive" : "sell"}</span><strong>≈ {tradeAmount && currentAsset.price > 0 ? fmtQty(Math.floor((usdOf(tradeAmount) / currentAsset.price) * 1e8) / 1e8) : "0"} {symbol}</strong></div><div><span>Available</span><strong>{side === "buy" ? money(data.user.cashBalance) : `${fmtQty(Number(data.holdings.find(h => h.symbol === symbol)?.quantity ?? 0))} ${symbol}`}</strong></div></div>
     <button className={`primary-btn full-btn ${side === "sell" ? "sell-btn" : ""}`} disabled={loading || !ready || !quoteLive}>{loading ? "Processing..." : !quoteLive ? "Waiting for live prices" : `${side === "buy" ? "Buy" : "Sell"} ${symbol}`} <ArrowRight size={17}/></button>
     <p className={`trade-quote-note ${quoteLive ? "" : "offline"}`}>{quoteLive ? "Final Live-trade price is verified by the server at execution." : "Live trading pauses until current market quotes are available."}</p>
     <p className="simulation-note"><ShieldCheck size={13}/> Live trading only.</p>
@@ -815,13 +873,13 @@ function HomePageInner() {
       <label className="input-label">Select asset</label>
       <div className="select-wrap"><AssetIcon asset={currentAsset} size={26}/><select value={symbol} onChange={e => setSymbol(e.target.value)}>{assets.map(a => <option key={a.symbol} value={a.symbol}>{a.name} ({a.symbol})</option>)}</select><ChevronDown size={16}/></div>
       {orderType !== "market" && <>
-        <label className="input-label">{orderType === "limit" ? "Limit price" : orderType === "stop_loss" ? "Stop trigger price" : "Take-profit trigger price"}</label>
-        <div className="amount-input"><span>$</span><input type="number" min="0.00000001" step="any" placeholder={currentAsset.price > 0 ? String(currentAsset.price) : "0.00"} value={orderPrice} onChange={e => setOrderPrice(e.target.value)} required/><span>USD</span></div>
+        <label className="input-label">{orderType === "limit" ? `Limit price in ${currency}` : orderType === "stop_loss" ? `Stop trigger price in ${currency}` : `Take-profit trigger price in ${currency}`}</label>
+        <div className="amount-input"><span>{inputSymbol}</span><input type="number" min="0" step="any" placeholder={currentAsset.price > 0 ? inMyCurrency(currentAsset.price, 8) : "0.00"} value={orderPrice} onChange={e => setOrderPrice(e.target.value)} required/><span>{currency}</span></div>
       </>}
       {durationPicker(orderDurationOn, setOrderDurationOn, orderDurationAmount, setOrderDurationAmount, orderDurationUnit, setOrderDurationUnit, orderType === "market" ? "Duration — automatically close this trade after" : "Duration — cancel automatically if unfilled after")}
-      <label className="input-label">Amount in USD</label>
-      <div className="amount-input"><span>$</span><input type="number" min="0.01" step="0.01" placeholder="0.00" value={tradeAmount} onChange={e => setTradeAmount(e.target.value)} required/><span>USD</span></div>
-      {currency !== "USD" && tradeAmount && Number(tradeAmount) > 0 && <p className="form-hint">≈ {money(Number(tradeAmount))}</p>}
+      <label className="input-label">Amount in {currency}</label>
+      <div className="amount-input"><span>{inputSymbol}</span><input type="number" min={inMyCurrency(0.01)} step="0.01" placeholder="0.00" value={tradeAmount} onChange={e => setTradeAmount(e.target.value)} required/><span>{currency}</span></div>
+      {amountHint(tradeAmount)}
       <div className="trade-details">
         <div><span>{orderType === "market" ? "Indicative market price" : "Order price"}</span><strong>{price > 0 ? marketPrice(price) : "—"}</strong></div>
         {isTimedMarketTrade ? <div><span>Exposure</span><strong>≈ {qty ? fmtQty(qty) : "0"} {symbol} ({side === "buy" ? "long" : "short"})</strong></div> : <div><span>You'll {side === "buy" ? "receive" : "sell"}</span><strong>≈ {qty ? fmtQty(qty) : "0"} {symbol}</strong></div>}
@@ -834,7 +892,10 @@ function HomePageInner() {
   };
   const marginOrderForm = () => {
     const entryPreview = currentAsset.price;
-    const marginNum = Number(marginAmount) || 0;
+    // marginAmount is typed in the user's currency; the position math below and
+    // the ledger both work in USD, so convert for the preview. The server does
+    // its own authoritative conversion when the position is opened.
+    const marginNum = usdOf(marginAmount);
     const notional = marginNum * leverageX;
     const qtyPreview = entryPreview > 0 ? notional / entryPreview : 0;
     const liqPreview = entryPreview > 0 && marginNum > 0 ? liquidationPrice(entryPreview, leverageX, positionSide) : 0;
@@ -844,19 +905,19 @@ function HomePageInner() {
       <div className="select-wrap"><AssetIcon asset={currentAsset} size={26}/><select value={symbol} onChange={e => setSymbol(e.target.value)}>{assets.map(a => <option key={a.symbol} value={a.symbol}>{a.name} ({a.symbol})</option>)}</select><ChevronDown size={16}/></div>
       <label className="input-label">Leverage</label>
       <div className="leverage-row">{LEVERAGE_OPTIONS.map(l => <button type="button" key={l} className={leverageX === l ? "active" : ""} onClick={() => setLeverageX(l)}>{l}x</button>)}</div>
-      <label className="input-label">Margin (collateral)</label>
-      <div className="amount-input"><span>$</span><input type="number" min={MIN_MARGIN} step="0.01" placeholder="100.00" value={marginAmount} onChange={e => setMarginAmount(e.target.value)} required/><span>USD</span></div>
-      {currency !== "USD" && marginAmount && Number(marginAmount) > 0 && <p className="form-hint">≈ {money(Number(marginAmount))}</p>}
+      <label className="input-label">Margin (collateral) in {currency}</label>
+      <div className="amount-input"><span>{inputSymbol}</span><input type="number" min={inMyCurrency(MIN_MARGIN)} step="0.01" placeholder={inMyCurrency(100)} value={marginAmount} onChange={e => setMarginAmount(e.target.value)} required/><span>{currency}</span></div>
+      {amountHint(marginAmount)}
       <div className="trade-details">
         <div><span>Entry price</span><strong>{marketPrice(entryPreview)}</strong></div>
         <div><span>Position size</span><strong>≈ {qtyPreview ? fmtQty(qtyPreview) : "0"} {symbol}</strong></div>
         <div><span>Notional value</span><strong>{money(notional)}</strong></div>
         <div><span>Liquidation price</span><strong className="negative-text">{liqPreview > 0 ? marketPrice(liqPreview) : "—"}</strong></div>
       </div>
-      <label className="input-label">Take-profit price (optional)</label>
-      <div className="amount-input"><span>$</span><input type="number" min="0" step="any" placeholder="Optional" value={positionTP} onChange={e => setPositionTP(e.target.value)}/><span>USD</span></div>
-      <label className="input-label">Stop-loss price (optional)</label>
-      <div className="amount-input"><span>$</span><input type="number" min="0" step="any" placeholder="Optional" value={positionSL} onChange={e => setPositionSL(e.target.value)}/><span>USD</span></div>
+      <label className="input-label">Take-profit price in {currency} (optional)</label>
+      <div className="amount-input"><span>{inputSymbol}</span><input type="number" min="0" step="any" placeholder="Optional" value={positionTP} onChange={e => setPositionTP(e.target.value)}/><span>{currency}</span></div>
+      <label className="input-label">Stop-loss price in {currency} (optional)</label>
+      <div className="amount-input"><span>{inputSymbol}</span><input type="number" min="0" step="any" placeholder="Optional" value={positionSL} onChange={e => setPositionSL(e.target.value)}/><span>{currency}</span></div>
       {durationPicker(positionDurationOn, setPositionDurationOn, positionDurationAmount, setPositionDurationAmount, positionDurationUnit, setPositionDurationUnit, "Duration — auto-close at market price after")}
       <button className={`primary-btn full-btn ${positionSide === "short" ? "sell-btn" : ""}`} disabled={openingPosition || !ready || !quoteLive}>{openingPosition ? "Opening..." : !quoteLive ? "Waiting for live prices" : `Open ${leverageX}x ${positionSide}`} <ArrowRight size={17}/></button>
       <p className={`trade-quote-note ${quoteLive ? "" : "offline"}`}>{quoteLive ? "Position opens at the live market price. Margin is deducted from your available balance immediately." : "Live trading pauses until current market quotes are available."}</p>
@@ -899,8 +960,8 @@ function HomePageInner() {
         <div className="segmented"><button type="button" className={alertDirection === "above" ? "active" : ""} onClick={() => setAlertDirection("above")}>Above</button><button type="button" className={alertDirection === "below" ? "active" : ""} onClick={() => setAlertDirection("below")}>Below</button></div>
       </div>
       <div style={{ flex: "1 1 160px" }}>
-        <label className="input-label">Target price (USD)</label>
-        <div className="amount-input"><span>$</span><input type="number" min="0" step="any" placeholder={currentAsset.price > 0 ? currentAsset.price.toFixed(2) : "0.00"} value={alertTargetPrice} onChange={(e) => setAlertTargetPrice(e.target.value)}/></div>
+        <label className="input-label">Target price ({currency})</label>
+        <div className="amount-input"><span>{inputSymbol}</span><input type="number" min="0" step="any" placeholder={currentAsset.price > 0 ? inMyCurrency(currentAsset.price, 8) : "0.00"} value={alertTargetPrice} onChange={(e) => setAlertTargetPrice(e.target.value)}/><span>{currency}</span></div>
       </div>
       <button className="primary-btn" style={{ height: 42 }} disabled={creatingAlert}>{creatingAlert ? "Creating..." : "Create alert"}<Bell size={16}/></button>
     </form>
@@ -941,7 +1002,7 @@ function HomePageInner() {
 
   return <div className="app-shell">
     {mobileMenu && <div className="mobile-overlay" onClick={() => setMobileMenu(false)}/>}
-    <aside className={`sidebar ${mobileMenu ? "sidebar-open" : ""}`}><div className="brand" onClick={() => go("Overview")}><div className="brand-icon"><Activity size={23} strokeWidth={3}/></div><span>Ava<span>Trades</span></span><button className="mobile-close" onClick={(e) => { e.stopPropagation(); setMobileMenu(false); }}><X size={19}/></button></div><div className="sidebar-body">{navGroups.map(group => <div className="nav-group" key={group.label}><div className="nav-label">{t(group.label)}</div>{group.items.map(item => { const Icon = item.icon; return <button key={item.name} className={`nav-item ${page === item.name ? "selected" : ""}`} onClick={() => go(item.name)}><Icon size={19} strokeWidth={page === item.name ? 2.25 : 1.8}/><span>{t(item.name)}</span>{item.name === "Trading Signals" && <span className="nav-new">{t("NEW")}</span>}</button>; })}</div>)}</div><div className="sidebar-bottom"><div className="help-card"><span className="help-bubble"><CircleHelp size={18}/></span><strong>{t("Need a hand?")}</strong><p>{t("Explore the platform with your free demo account.")}</p><button onClick={() => { go("Trading Signals"); }}>{t("Explore signals")} <ArrowRight size={14}/></button></div><div className="sidebar-footer"><ShieldCheck size={15}/> {t("Secure Live trading platform")}</div></div></aside>
+    <aside className={`sidebar ${mobileMenu ? "sidebar-open" : ""}`}><div className="brand" onClick={() => go("Overview")}><div className="brand-icon"><Activity size={23} strokeWidth={3}/></div><span>Ava<span>Trades</span></span><button className="mobile-close" onClick={(e) => { e.stopPropagation(); setMobileMenu(false); }}><X size={19}/></button></div><div className="sidebar-body">{navGroups.map(group => <div className="nav-group" key={group.label}><div className="nav-label">{t(group.label)}</div>{group.items.map(item => { const Icon = item.icon; return <button key={item.name} className={`nav-item ${page === item.name ? "selected" : ""}`} onClick={() => go(item.name)}><Icon size={19} strokeWidth={page === item.name ? 2.25 : 1.8}/><span>{t(item.name)}</span>{item.name === "Trading Signals" && <span className="nav-new">{t("NEW")}</span>}</button>; })}</div>)}</div><div className="sidebar-bottom"><div className="help-card"><span className="help-bubble"><CircleHelp size={18}/></span><strong>{t("Need a hand?")}</strong><p>{t("Explore the platform with your free demo account.")}</p><button onClick={() => { go("Trading Signals"); }}>{t("Explore signals")} <ArrowRight size={14}/></button></div><div className="sidebar-footer"><ShieldCheck size={15}/> {t("Secure live trading platform")}</div></div></aside>
     <div className="main-shell"><header className="topbar"><div className="topbar-left"><button className="icon-btn menu-btn" onClick={() => setMobileMenu(true)} aria-label="Open menu"><Menu size={22}/></button><div className="breadcrumb"><span className="breadcrumb-prefix">{t("Workspace")} <ChevronRight size={15}/></span> <strong>{t(page)}</strong></div></div><div className="topbar-right"><div className={`market-status ${market.status}`} title={market.updatedAt ? `CoinGecko quote updated ${new Date(market.updatedAt).toLocaleString()}` : "CoinGecko market data"} aria-live="polite"><i/><span className="market-status-label">{market.status === "live" ? `Live · ${asOf}` : market.status === "loading" ? "Loading markets" : market.status === "stale" ? "Stale quotes" : "Prices offline"}</span><button className="market-refresh" title="Refresh prices and chart" aria-label="Refresh prices and chart" onClick={() => { void refreshMarket(); setChartRefresh(n => n + 1); }}><RefreshCw size={13} className={marketRefreshing ? "spin" : ""}/></button></div><div className="top-search"><Search size={18}/><input placeholder={t("Search markets...")} value={search} onChange={e => { setSearch(e.target.value); if (e.target.value) setPage("Markets"); }} onFocus={() => {}}/><span>⌘ K</span></div><span className="topbar-divider"/><button className="theme-toggle" aria-label={theme === "dark" ? t("Switch to light mode") : t("Switch to dark mode")} title={theme === "dark" ? t("Switch to light mode") : t("Switch to dark mode")} onClick={toggleTheme}>{theme === "dark" ? <Sun size={19}/> : <Moon size={19}/>}</button><div className="notification-wrap"><button className="icon-btn notif-btn" aria-label={t("Language")} title={t("Language")} onClick={() => { setLanguageMenuOpen(!languageMenuOpen); setNotificationsOpen(false); setProfileOpen(false); }}><Globe size={20}/></button>{languageMenuOpen && <div className="popover language-popover"><div className="popover-title">{t("Language")}{translating && <span className="language-translating">…</span>}</div>{LANGUAGES.map(l => <button key={l.code} className={`language-option ${language === l.code ? "selected" : ""}`} onClick={() => changeLanguage(l.code)}><span className="language-flag">{l.flag}</span><span className="language-name">{l.nativeLabel}</span>{language === l.code && <Check size={15}/>}</button>)}</div>}</div><div className="notification-wrap"><button className="icon-btn notif-btn" aria-label="Notifications" onClick={toggleNotifications}><Bell size={20}/>{data.unreadNotifications > 0 && <i/>}</button>{notificationsOpen && <div className="popover notification-popover"><div className="popover-title">{t("Notifications")} {data.unreadNotifications > 0 && <span>{data.unreadNotifications} new</span>}</div>{data.notifications.length === 0 ? <div className="notification-empty"><Bell size={18}/><p>{t("No notifications yet")}</p></div> : data.notifications.map(n => { const { Icon, color } = notificationVisual(n.type); return <div className={`notification-item ${n.readAt ? "" : "unread"}`} key={n.id}><span className={`notification-icon ${color}`}><Icon size={16}/></span><div><strong>{n.title}</strong><p>{n.message}</p><small>{timeAgo(n.createdAt)}</small></div></div>; })}<button className="notification-see-all" onClick={() => { setNotificationsOpen(false); go("Notifications"); }}>{t("See all notifications")} <ArrowRight size={13}/></button></div>}</div><div className="profile-wrap"><button className="profile-button" onClick={() => { setProfileOpen(!profileOpen); setNotificationsOpen(false); }}><span className="avatar">{data.user.profilePhoto ? <img src={data.user.profilePhoto} alt="" style={{width:"100%",height:"100%",borderRadius:"50%",objectFit:"cover"}}/> : data.user.name.split(" ").map(n => n[0]).slice(0, 2).join("")}</span><span className="profile-meta"><strong>{data.user.name}</strong><small>{data.user.isDemo ? t("Demo account") : (data.plan ? data.plan + " " + t("member") : t("No active plan"))}</small></span><ChevronDown size={16}/></button>{profileOpen && <div className="popover profile-popover"><div className="profile-pop-head"><strong>{data.user.name}</strong><span>{data.user.email ?? t("Exploring in demo mode")}</span></div>{data.user.role === "admin" && <a href="/admin" className="admin-link-btn"><ShieldCheck size={17}/> {t("Admin panel")}</a>}{!data.user.isDemo && <button onClick={() => { setPage("Profile"); setProfileOpen(false); }}><UserRound size={17}/> {t("View profile")}</button>}{data.user.isDemo ? <><button onClick={() => { setAuthMode("register"); setProfileOpen(false); }}><UserRound size={17}/> {t("Create an account")}</button><button onClick={() => { setAuthMode("login"); setProfileOpen(false); }}><LockKeyhole size={17}/> {t("Sign in")}</button></> : <button onClick={logout}><LogOut size={17}/> {t("Log out")}</button>}</div>}</div></div></header>
     <main className="content">
       {(market.status === "stale" || market.status === "unavailable") && <div className="market-alert" role="status"><Clock3 size={17}/><span><strong>{market.status === "stale" ? "Market data is stale." : "Market prices are temporarily unavailable."}</strong> {market.status === "stale" ? `Showing last known CoinGecko quotes${asOf ? ` from ${asOf}` : ""}.` : "Check the connection or try again shortly."} Live trading is paused until live prices return.</span><button onClick={() => void refreshMarket()}>Retry</button></div>}
@@ -995,7 +1056,7 @@ function HomePageInner() {
             <section className="panel market-panel"><SectionHead title="Market overview" subtitle={market.status === "live" ? `Live CoinGecko quotes · Updated ${asOf}` : market.status === "loading" ? "Loading market prices…" : "Last known CoinGecko quotes"} action={<button className="text-link" onClick={() => go("Markets")}>View all markets <ArrowRight size={16}/></button>}/>{marketTable(assets.slice(0, 4))}</section>
           </div>
           <div className="dashboard-right">
-            <section className="panel quick-trade-panel"><SectionHead title="Quick trade" subtitle="Live trade at the current quote"/>{tradeForm()}</section>
+            <section className="panel quick-trade-panel"><SectionHead title="Quick trade" subtitle="Trade at the current live quote"/>{tradeForm()}</section>
             <section className="panel allocation-panel"><SectionHead title="Your allocation" subtitle="Portfolio breakdown"/><div className="allocation-content"><div className="donut" style={{ background: allocationBackground }}><div><small>Total value</small><strong>{money(portfolioValue, 0)}</strong></div></div><div className="allocation-legend">{allocations.length && hasQuotes ? allocations.map(item => <div key={item.symbol}><span><i style={{ background: item.color }}/>{item.symbol}</span><strong>{(item.value / portfolioValue * 100).toFixed(1)}%</strong></div>) : <span className="allocation-empty">{hasQuotes ? "No assets held yet" : "Waiting for prices"}</span>}</div></div></section>
           </div>
         </div>
@@ -1006,7 +1067,7 @@ function HomePageInner() {
         <div className="stats-grid">
           {card(Wallet, "Total portfolio", money(totalBalance), <span>Cash + invested assets + profits</span>)}
           {card(TrendingUp, "Invested value", money(portfolioValue), <span>{data.holdings.length} assets held</span>, "purple")}
-          {card(CreditCard, "Available to trade", money(data.user.cashBalance), <span>In your Live USD wallet</span>, "green")}
+          {card(CreditCard, "Available to trade", money(data.user.cashBalance), <span>In your live trading wallet</span>, "green")}
           {card(Gift, "Profits", money(data.user.profitBalance), <span>Credited by admin</span>, "orange")}
         </div>
         <div className="two-col portfolio-layout">
@@ -1022,7 +1083,7 @@ function HomePageInner() {
         <PageTitle title={t("Trade crypto")} description={t("Live candlestick charts, full order types, and leveraged positions — no fees, no slippage.")}/>
         <div className="trade-layout">
           <section className="panel trade-asset-panel">
-            <div className="trade-asset-head"><div className="coin-cell"><AssetIcon asset={currentAsset} size={48}/><div><h2>{currentAsset.name} <span>{symbol}</span></h2><p>Market data by CoinGecko · Live trading</p></div></div><div style={{ display: "flex", alignItems: "center", gap: 10 }}><button className="icon-btn" title={watchlist.includes(symbol) ? "Remove from watchlist" : "Add to watchlist"} disabled={watchlistBusy === symbol} onClick={() => toggleWatchlist(symbol)}><Star size={20} fill={watchlist.includes(symbol) ? "#f5a623" : "none"} color={watchlist.includes(symbol) ? "#f5a623" : "currentColor"}/></button><span className={`market-open ${quoteLive ? "" : "offline"}`}><span/>{quoteLive ? "Live quote" : "Trading paused"}</span></div></div>
+            <div className="trade-asset-head"><div className="coin-cell"><AssetIcon asset={currentAsset} size={48}/><div><h2>{currentAsset.name} <span>{symbol}</span></h2><p>Market data by CoinGecko · live trading</p></div></div><div style={{ display: "flex", alignItems: "center", gap: 10 }}><button className="icon-btn" title={watchlist.includes(symbol) ? "Remove from watchlist" : "Add to watchlist"} disabled={watchlistBusy === symbol} onClick={() => toggleWatchlist(symbol)}><Star size={20} fill={watchlist.includes(symbol) ? "#f5a623" : "none"} color={watchlist.includes(symbol) ? "#f5a623" : "currentColor"}/></button><span className={`market-open ${quoteLive ? "" : "offline"}`}><span/>{quoteLive ? "Live quote" : "Trading paused"}</span></div></div>
             <div className="asset-price"><strong>{marketPrice(currentAsset.price)}</strong>{currentAsset.price > 0 && <span className={currentAsset.change >= 0 ? "positive-text" : "negative-text"}>{currentAsset.change >= 0 ? "+" : ""}{currentAsset.change.toFixed(2)}% today</span>}</div>
             <div className="large-chart"><CandlestickChart candles={candles} period={period} status={candleStatus} label={`${currentAsset.name} price`} currency={currency} rate={fxRate}/></div>
             <div className="periods chart-periods">{(["24H", "7D", "30D", "1Y"] as ChartPeriod[]).map(p => <button key={p} className={period === p ? "active" : ""} onClick={() => setPeriod(p)}>{p}</button>)}</div>
@@ -1041,11 +1102,11 @@ function HomePageInner() {
       {page === "Markets" && <>
         <PageTitle title={t("Explore markets")} description={t("Discover assets and find your next opportunity using CoinGecko market data.")}><button className="outline-btn" onClick={() => { setSearch(""); setMarketTab("All assets"); }}><SlidersHorizontal size={17}/> Reset filters</button></PageTitle>
         <div className="market-highlights">{assets.slice(0, 3).map(a => <button className="highlight-card" key={a.symbol} onClick={() => { setSymbol(a.symbol); go("Trade"); }}><div className="highlight-top"><div className="coin-cell"><AssetIcon asset={a} size={37}/><div><strong>{a.name}</strong><span>{a.symbol}</span></div></div><ArrowUpRight size={17}/></div><div className="highlight-bottom"><div><strong>{marketPrice(a.price)}</strong>{a.price > 0 ? <span className={a.change >= 0 ? "positive-text" : "negative-text"}>{a.change >= 0 ? "+" : ""}{a.change.toFixed(2)}% today</span> : <span className="price-placeholder">Waiting for quotes</span>}</div><Sparkline values={a.chart} positive={a.change7d >= 0} width={112} height={44}/></div></button>)}</div>
-        <section className="panel"><div className="section-head market-section-head"><div><h2>All cryptocurrencies</h2><p>{market.status === "live" ? `Live prices · updated ${asOf}` : market.status === "loading" ? "Loading prices from CoinGecko…" : "Last known prices · trading paused"}</p></div><div className="market-controls"><div className="market-search"><Search size={17}/><input placeholder="Search assets" value={search} onChange={e => setSearch(e.target.value)}/></div><div className="segmented">{["All assets", "Gainers", "Losers", "Watchlist"].map(t => <button key={t} className={marketTab === t ? "active" : ""} onClick={() => setMarketTab(t)}>{t === "Watchlist" ? `${t} (${watchlist.length})` : t}</button>)}</div></div></div>{marketTable(filteredAssets, true)}<p className="market-data-note"><Activity size={13}/> Aggregated market data by CoinGecko. Prices are indicative; trades remain simulated.</p></section>
+        <section className="panel"><div className="section-head market-section-head"><div><h2>All cryptocurrencies</h2><p>{market.status === "live" ? `Live prices · updated ${asOf}` : market.status === "loading" ? "Loading prices from CoinGecko…" : "Last known prices · trading paused"}</p></div><div className="market-controls"><div className="market-search"><Search size={17}/><input placeholder="Search assets" value={search} onChange={e => setSearch(e.target.value)}/></div><div className="segmented">{["All assets", "Gainers", "Losers", "Watchlist"].map(t => <button key={t} className={marketTab === t ? "active" : ""} onClick={() => setMarketTab(t)}>{t === "Watchlist" ? `${t} (${watchlist.length})` : t}</button>)}</div></div></div>{marketTable(filteredAssets, true)}<p className="market-data-note"><Activity size={13}/> Aggregated market data by CoinGecko. Prices are indicative; trades execute at live prices.</p></section>
       </>}
       {page === "Trading Bot" && <>
-        <PageTitle title={t("Trading bots")} description={t("Subscribe to an admin-managed bot strategy, then configure it to trade.")}><span className="demo-badge"><span/> Live mode</span></PageTitle>
-        <div className="feature-banner bot-banner"><div className="feature-icon"><Bot size={26}/></div><div><span className="banner-eyebrow">TRADE SMARTER, NOT HARDER</span><h2>Put your strategy on autopilot.</h2><p>Browse bot strategies, subscribe for the period shown on each card, then configure any number of instances to trade with.</p></div><div className="banner-art"><Bot size={100} strokeWidth={1}/></div></div>
+        <PageTitle title={t("Trading bots")} description={t("Subscribe to an admin-managed bot strategy, then configure it to trade.")}><span className="demo-badge"><span/> Live trading</span></PageTitle>
+        <div className="feature-banner bot-banner"><div className="feature-icon"><Bot size={26}/></div><div><span className="banner-eyebrow">TRADE SMARTER, NOT HARDER</span><h2>Put your strategy on autopilot.</h2><p>Browse admin-curated bot strategies, subscribe for the period shown on each card, then configure any number of instances to trade with.</p></div><div className="banner-art"><Bot size={100} strokeWidth={1}/></div></div>
         <div className="section-title-row"><div><h2>Available bots</h2><p>Each subscription runs for the duration shown on its card, starting the moment you subscribe</p></div><span className="subtle-label">{tradingBots.filter(b=>b.mySubscription).length} active</span></div>
         {!tradingBotsLoaded ? <div className="no-results">Loading bots...</div> : tradingBots.length === 0 ? <EmptyState icon={Bot} title="No bots available yet" text="Check back soon — an admin hasn't added any trading bots yet."/> : <div className="trader-grid">{tradingBots.map((b,botIdx)=>{
           const subscribed = !!b.mySubscription;
@@ -1074,7 +1135,7 @@ function HomePageInner() {
                 <label className="input-label">Asset to trade</label>
                 <div className="select-wrap"><AssetIcon asset={getAsset(newInstanceSymbol)!} size={24}/><select value={newInstanceSymbol} onChange={e=>setNewInstanceSymbol(e.target.value)}>{assets.map(a=><option key={a.symbol} value={a.symbol}>{a.name} ({a.symbol})</option>)}</select><ChevronDown size={16}/></div>
                 <label className="input-label">Allocation (min {money(Number(b.minAllocation))})</label>
-                <div className="amount-input"><span>$</span><input type="number" min={b.minAllocation} step="0.01" value={newInstanceAmount} onChange={e=>setNewInstanceAmount(e.target.value)}/><span>USD</span></div>
+                <div className="amount-input"><span>{inputSymbol}</span><input type="number" min={inMyCurrency(Number(b.minAllocation))} step="0.01" value={newInstanceAmount} onChange={e=>setNewInstanceAmount(e.target.value)}/><span>{currency}</span></div>
                 <label className="input-label">Name (optional)</label>
                 <input className="text-input" placeholder={`${b.name} · ${newInstanceSymbol}`} value={newInstanceName} onChange={e=>setNewInstanceName(e.target.value)} maxLength={80}/>
                 <button className="primary-btn full-btn" disabled={instanceCreating} onClick={()=>createBotInstance(b)}>{instanceCreating ? "Adding..." : <>Add bot instance <Plus size={16}/></>}</button>
@@ -1082,7 +1143,7 @@ function HomePageInner() {
             </div>
           </div>;
         })}</div>}
-        <div className="copy-note"><ShieldCheck size={19}/><span>Bots are configurations Subscribing charges your available cash balance for that bot&apos;s subscription period; resubscribe once it lapses to keep running your bots.</span></div>
+        <div className="copy-note"><ShieldCheck size={19}/><span>Subscribing charges your available account balance for the bot subscription period. Configure and activate your bot to trade, and resubscribe when access expires.</span></div>
         <div className="section-title-row"><div><h2>My bots</h2><p>Configured instances across your subscribed bots</p></div></div>
         {botInstances.length === 0 ? <EmptyState icon={Bot} title="No bots configured yet" text="Subscribe to a bot above, then configure an instance to see it here."/> : <div className="panel bot-list">{botInstances.map(bot=><div className="bot-item" key={bot.id}>
           <div className="bot-item-top"><span className="bot-item-icon"><Bot size={22}/></span><span className={`bot-status ${bot.active && bot.subscriptionActive ? "running":"paused"}`}><span/>{bot.active && bot.subscriptionActive ? "Active" : bot.active && !bot.subscriptionActive ? "Needs resubscribe" : "Paused"}</span></div>
@@ -1099,7 +1160,7 @@ function HomePageInner() {
       </>}
       {page === "Copy Trading" && <>
         <PageTitle title={t("Copy trading")} description={t("Subscribe to a trader's strategy and track your subscription history.")}/>
-        <div className="feature-banner copy-banner"><div className="feature-icon"><UsersRound size={25}/></div><div><span className="banner-eyebrow">LEARN FROM THE BEST</span><h2>Great minds trade alike.</h2><p>Browse expert traders and subscribe to follow their strategy for the period shown on each card.</p></div><div className="banner-art"><UsersRound size={105} strokeWidth={1}/></div></div>
+        <div className="feature-banner copy-banner"><div className="feature-icon"><UsersRound size={25}/></div><div><span className="banner-eyebrow">LEARN FROM THE BEST</span><h2>Great minds trade alike.</h2><p>Browse admin-curated traders and subscribe to follow their strategy for the period shown on each card.</p></div><div className="banner-art"><UsersRound size={105} strokeWidth={1}/></div></div>
         <div className="section-title-row"><div><h2>Available traders</h2><p>Each subscription runs for the duration shown on its card, starting the moment you subscribe</p></div><span className="subtle-label">{copyTraders.filter(t=>t.mySubscription).length} active</span></div>
         {!copyTradersLoaded ? <div className="no-results">Loading traders...</div> : copyTraders.length === 0 ? <EmptyState icon={UsersRound} title="No traders available yet" text="Check back soon — an admin hasn't added any copy traders yet."/> : <div className="trader-grid">{copyTraders.map(t=>{
           const subscribed = !!t.mySubscription;
@@ -1127,7 +1188,7 @@ function HomePageInner() {
             </div>
           </div>;
         })}</div>}
-        <div className="copy-note"><ShieldCheck size={19}/><span>Subscribing charges your available cash balance and grants 7 days of access to that trader's strategy. There is no auto-renewal — resubscribe once your access expires.</span></div>
+        <div className="copy-note"><ShieldCheck size={19}/><span>Subscribing charges your available account balance and grants 7 days of access to that trader's strategy. There is no auto-renewal — resubscribe once your access expires.</span></div>
         <div className="section-title-row"><div><h2>My subscriptions</h2><p>Your copy trading subscription history</p></div></div>
         {mySubscriptions.length === 0 ? <EmptyState icon={History} title="No subscriptions yet" text="Subscribe to a trader above to see your history here."/> : <div className="table-scroll"><table className="data-table"><thead><tr><th>Trader</th><th>Amount</th><th>Started</th><th>Expires</th><th>Status</th></tr></thead><tbody>{mySubscriptions.map(s=>{
           const left = daysLeft(s.expiresAt);
@@ -1141,18 +1202,18 @@ function HomePageInner() {
         {signals.length ? <div className="signal-grid">{signals.map(a => {
           const rangePosition = a.high24h !== null && a.low24h !== null && a.high24h > a.low24h ? Math.max(0, Math.min(100, Math.round((a.price - a.low24h) / (a.high24h - a.low24h) * 100))) : null;
           return <div className="panel signal-card" key={a.symbol}>
-            <div className="signal-card-top"><div className="coin-cell"><AssetIcon asset={a} size={42}/><div><strong>{a.name}</strong><span>{a.symbol}/USD</span></div></div><span className={`signal-type ${a.change >= 0 ? "buy" : "sell"}`}>{a.change >= 0 ? <TrendingUp size={14}/> : <TrendingDown size={14}/>} {a.change >= 0 ? "Rising" : "Falling"}</span></div>
+            <div className="signal-card-top"><div className="coin-cell"><AssetIcon asset={a} size={42}/><div><strong>{a.name}</strong><span>{a.symbol}/{currency}</span></div></div><span className={`signal-type ${a.change >= 0 ? "buy" : "sell"}`}>{a.change >= 0 ? <TrendingUp size={14}/> : <TrendingDown size={14}/>} {a.change >= 0 ? "Rising" : "Falling"}</span></div>
             <p>{a.name} has {a.change >= 0 ? "gained" : "declined"} {Math.abs(a.change).toFixed(2)}% over 24 hours and {a.change7d >= 0 ? "gained" : "declined"} {Math.abs(a.change7d).toFixed(2)}% over 7 days.</p>
             <div className="confidence-row"><span>Position in today's price range</span><strong>{rangePosition === null ? "—" : `${rangePosition}%`}</strong></div><div className="confidence-track"><span style={{ width: `${rangePosition ?? 0}%` }}/></div>
             <div className="signal-levels"><div><span>Current quote</span><strong>{marketPrice(a.price)}</strong></div><div><span>24h low</span><strong>{a.low24h === null ? "—" : marketPrice(a.low24h)}</strong></div><div><span>24h high</span><strong>{a.high24h === null ? "—" : marketPrice(a.high24h)}</strong></div></div>
             <div className="signal-bottom"><span><Clock3 size={14}/> Updated {a.updatedAt ? new Date(a.updatedAt).toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit" }) : "recently"}</span><button onClick={() => { setSymbol(a.symbol); go("Trade"); }}>View chart <ArrowRight size={15}/></button></div>
           </div>;
         })}</div> : <div className="panel"><EmptyState icon={Signal} title="Market observations unavailable" text="Live market prices have not loaded yet. Try refreshing in a moment."/></div>}
-        <p className="disclaimer">CoinGecko provides market data, not trading advice. All trades and account balances on AvaTrades are simulated.</p>
+        <p className="disclaimer">CoinGecko provides market data, not trading advice. Trades and account balances reflect activity on AvaTrades.</p>
       </>}
       {page === "Plans" && <>
         <PageTitle title={t("Choose your plan")} description={t("Subscribe weekly to unlock more of the platform. No auto-renewal — resubscribe (or switch) once your week is up.")}/>
-        <div className="plans-intro"><span><Sparkles size={19}/></span> Your current plan is <strong>{data.plan ?? "No active plan"}</strong>{data.planExpiresAt && !!data.planAmount && <> · renews by {new Date(data.planExpiresAt).toLocaleDateString()}</>}. Plan charges are simulated and deducted from your demo balance.</div>
+        <div className="plans-intro"><span><Sparkles size={19}/></span> Your current plan is <strong>{data.plan ?? "No active plan"}</strong>{data.planExpiresAt && !!data.planAmount && <> · renews by {new Date(data.planExpiresAt).toLocaleDateString()}</>}. Plan charges are deducted from your available account balance.</div>
         {!plansLoaded ? <div className="no-results">Loading plans...</div> : plansCatalog.length === 0 ? <EmptyState icon={Sparkles} title="No plans available yet" text="Check back soon — an admin hasn't added any plans yet."/> : <div className="plans-grid">{plansCatalog.map(p=>{
           const isCurrent = !!p.mySubscription?.isCurrent;
           const left = p.mySubscription ? daysLeft(p.mySubscription.expiresAt) : 0;
@@ -1167,7 +1228,7 @@ function HomePageInner() {
             <p className="subtle-label" style={{marginTop:10}}>{p.activeSubscribers} active subscriber{p.activeSubscribers===1?"":"s"}</p>
           </div>;
         })}</div>}
-        <p className="disclaimer">Not finnacial advise</p>
+        <p className="disclaimer">Plan subscriptions are charged to your account balance and provide access to the listed platform features.</p>
         <div className="section-title-row"><div><h2>My plan subscriptions</h2><p>Your plan subscription history</p></div></div>
         {planSubHistory.length === 0 ? <EmptyState icon={History} title="No subscriptions yet" text="Choose a plan above to see your history here."/> : <div className="table-scroll"><table className="data-table"><thead><tr><th>Plan</th><th>Amount</th><th>Started</th><th>Expires</th><th>Status</th></tr></thead><tbody>{planSubHistory.map(s=>{
           const left = daysLeft(s.expiresAt);
@@ -1198,8 +1259,9 @@ function HomePageInner() {
               </label>)}
             </div>}
             <form className="deposit-form" onSubmit={submitDeposit}>
-              <label className="input-label">3. Amount you sent (USD)</label>
-              <div className="amount-input funding-input"><span>$</span><input type="number" min="1" step="0.01" placeholder="0.00" value={depositAmount} onChange={e => setDepositAmount(e.target.value)} required/><span>USD</span></div>
+              <label className="input-label">3. Amount you sent ({currency})</label>
+              <div className="amount-input funding-input"><span>{inputSymbol}</span><input type="number" min={inMyCurrency(1)} step="0.01" placeholder="0.00" value={depositAmount} onChange={e => setDepositAmount(e.target.value)} required/><span>{currency}</span></div>
+              {amountHint(depositAmount)}
               <label className="input-label">Reference (sender name, tx hash, last 4 digits — optional)</label>
               <input className="text-input" placeholder="e.g. Transaction ID or sender name" value={depositReference} onChange={e => setDepositReference(e.target.value)} maxLength={200}/>
               <label className="input-label">4. Upload your receipt</label>
@@ -1211,7 +1273,7 @@ function HomePageInner() {
               <label className="input-label">Note for the admin (optional)</label>
               <textarea className="text-input deposit-textarea" placeholder="Anything else the reviewer should know" value={depositNote} onChange={e => setDepositNote(e.target.value)} maxLength={1000} rows={3}/>
               <button className="primary-btn full-btn" disabled={depositSubmitting || !ready}><Paperclip size={16}/>{depositSubmitting ? "Submitting..." : "Submit deposit for review"}</button>
-              <p className="simulation-note"><ShieldCheck size={13}/> Your balance only updates after receipt is verified. No automatic crediting occurs.</p>
+              <p className="simulation-note"><ShieldCheck size={13}/> Your balance only updates after an admin verifies this receipt. No automatic crediting occurs.</p>
             </form>
           </section>
           <section className="panel deposit-history-panel">
@@ -1242,9 +1304,10 @@ function HomePageInner() {
               {withdrawalMethod === "other" && <><label className="input-label">Platform name</label><input className="text-input" placeholder="e.g. Skrill, Payoneer, Zelle..." value={withdrawalMethodLabelInput} onChange={e => setWithdrawalMethodLabelInput(e.target.value)} maxLength={60}/></>}
               <label className="input-label">2. Where should we send it?</label>
               <textarea className="text-input deposit-textarea" placeholder={WITHDRAWAL_METHODS.find(m => m.id === withdrawalMethod)?.placeholder} value={withdrawalDestination} onChange={e => setWithdrawalDestination(e.target.value)} rows={3} maxLength={500} required/>
-              <label className="input-label">3. Amount to withdraw (USD)</label>
-              <div className="amount-input funding-input"><span>$</span><input type="number" min="1" step="0.01" placeholder="0.00" value={withdrawalAmount} onChange={e => setWithdrawalAmount(e.target.value)} required/><span>USD</span></div>
-              <div className="quick-amounts">{[100, 500, 1000, 5000].map(n => <button type="button" key={n} onClick={() => setWithdrawalAmount(String(n))}>${n.toLocaleString()}</button>)}</div>
+              <label className="input-label">3. Amount to withdraw ({currency})</label>
+              <div className="amount-input funding-input"><span>{inputSymbol}</span><input type="number" min={inMyCurrency(1)} step="0.01" placeholder="0.00" value={withdrawalAmount} onChange={e => setWithdrawalAmount(e.target.value)} required/><span>{currency}</span></div>
+              {amountHint(withdrawalAmount)}
+              <div className="quick-amounts">{[100, 500, 1000, 5000].map(n => <button type="button" key={n} onClick={() => setWithdrawalAmount(inMyCurrency(n))}>{money(n, 0)}</button>)}</div>
               <div className="funding-balance"><span>Available wallet balance</span><strong>{money(data.user.cashBalance)}</strong></div>
               <label className="input-label">Note for the admin (optional)</label>
               <textarea className="text-input deposit-textarea" placeholder="Anything else the reviewer should know" value={withdrawalNote} onChange={e => setWithdrawalNote(e.target.value)} maxLength={1000} rows={2}/>
@@ -1333,7 +1396,7 @@ function HomePageInner() {
         const visibleOrders = [...myOrders.open, ...myOrders.history].filter(o => matchesSearch(o.symbol));
         const visiblePositions = [...myPositions.open, ...myPositions.history].filter(p => matchesSearch(p.symbol));
         return <>
-        <PageTitle title={t("Trade history")} description={t("Review every spot trade, order, and leveraged position in your Live-trading account.")}><button className="outline-btn" onClick={()=>go("Trade")}><Plus size={17}/> New trade</button></PageTitle>
+        <PageTitle title={t("Trade history")} description={t("Review every spot trade, order, and leveraged position in your trading account.")}><button className="outline-btn" onClick={()=>go("Trade")}><Plus size={17}/> New trade</button></PageTitle>
         <div className="segmented" style={{ marginBottom: 18 }}>{(["Trades", "Orders", "Positions"] as const).map(s => <button key={s} className={historySection === s ? "active" : ""} onClick={() => setHistorySection(s)}>{s}</button>)}</div>
         {historySection === "Trades" && <>
           <div className="stats-grid three">{card(ArrowLeftRight,"Total trades",String(data.trades.length),<span>Completed orders</span>)}{card(ArrowDownLeft,"Buy orders",String(data.trades.filter(t=>t.side==="buy").length),<span>Assets purchased</span>,"green")}{card(ArrowUpRight,"Sell orders",String(data.trades.filter(t=>t.side==="sell").length),<span>Assets sold</span>,"orange")}</div>
@@ -1376,7 +1439,7 @@ function HomePageInner() {
         </>}
         </>;
       })()}
-      <footer className="main-footer"><span>© 2026 AvaTrades. Built for curious traders.</span><span><ShieldCheck size={14}/> · Not financial advice</span></footer>
+      <footer className="main-footer"><span>© 2026 AvaTrades. Built for curious traders.</span><span><ShieldCheck size={14}/> Live trading · Not financial advice</span></footer>
     </main></div>
     {toast && <div className={`toast ${toast.error ? "error":""}`}><span>{toast.error ? <X size={17}/>:<Check size={17}/>}</span>{toast.text}<button onClick={()=>setToast(null)}><X size={15}/></button></div>}
     {authMode==="login" && <div className="modal-overlay" onMouseDown={e=>{if(e.target===e.currentTarget)setAuthMode(null);}}><div className="auth-modal"><button className="modal-close" onClick={()=>setAuthMode(null)} aria-label="Close"><X size={20}/></button><div className="modal-brand"><div className="brand-icon"><Activity size={23} strokeWidth={3}/></div>Ava<span>Trades</span></div><h2>{t("Welcome back")}</h2><p>{t("Sign in to pick up right where you left off.")}</p><form onSubmit={authenticate}><label className="input-label">{t("Email or username")}</label><input className="text-input" placeholder="you@example.com or username" value={authIdentifier} onChange={e=>setAuthIdentifier(e.target.value)} required/><label className="input-label">{t("Password")}</label><input className="text-input" type="password" placeholder="At least 8 characters" value={authPassword} onChange={e=>setAuthPassword(e.target.value)} required/><div className="modal-forgot"><button type="button" onClick={()=>{setAuthMode(null);setForgotPasswordOpen(true);}}>{t("Forgot password?")}</button></div><button className="primary-btn full-btn" disabled={loading}>{loading?t("Please wait..."):t("Sign in")}<ArrowRight size={17}/></button></form><div className="modal-switch">{t("New to AvaTrades?")} <button onClick={()=>setAuthMode("register")}>{t("Create account")}</button></div><div className="modal-security"><LockKeyhole size={14}/> {t("Your account is secured with encrypted credentials")}</div></div></div>}
