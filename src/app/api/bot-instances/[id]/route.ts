@@ -5,6 +5,7 @@ import { and, eq, gt } from "drizzle-orm";
 import { getUser } from "@/lib/auth";
 import { blockedActionMessage } from "@/lib/accounts";
 import { getAsset } from "@/lib/market";
+import { moneyFormatterFor } from "@/lib/fx-server";
 
 export const dynamic = "force-dynamic";
 const bad = (message: string, status = 400) => NextResponse.json({ error: message }, { status });
@@ -43,7 +44,10 @@ export async function PATCH(request: NextRequest, { params }: { params: Promise<
       const [product] = await db.select().from(botProducts).where(eq(botProducts.id, instance.botProductId)).limit(1);
       const minAllocation = Number(product?.minAllocation ?? 0);
       const amount = Number(body.amount);
-      if (!Number.isFinite(amount) || amount < minAllocation) return bad(`Enter an allocation of at least $${minAllocation.toFixed(2)}.`);
+      if (!Number.isFinite(amount) || amount < minAllocation) {
+        const fmt = await moneyFormatterFor(user.currency);
+        return bad(`Enter an allocation of at least ${fmt.usd(minAllocation)}.`);
+      }
       if (amount > 10000000) return bad("Enter a smaller allocation amount.");
       updates.amount = amount.toFixed(2);
     }

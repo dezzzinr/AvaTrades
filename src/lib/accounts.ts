@@ -70,11 +70,15 @@ export function blockedActionMessage(user: StatusFields, kind: "trade" | "deposi
 // Specifically for the "trade" action, where the limit is a dollar amount
 // rather than an outright block. Returns a friendly error, or null if the
 // trade's total value is within bounds (or no limit applies).
-export function tradeLimitMessage(user: StatusFields, totalValue: number): string | null {
+// `usdLabel` is optional: pass a currency-aware formatter (e.g. `fmt.usd`
+// from moneyFormatterFor) so the cap is shown in the user's own display
+// currency alongside the USD ledger value. Without it, plain USD is used.
+export function tradeLimitMessage(user: StatusFields, totalValue: number, usdLabel?: (amountUSD: number) => string): string | null {
   if (user.accountStatus !== "limited" || user.maxTradeAmount == null) return null;
   const cap = Number(user.maxTradeAmount);
   if (Number.isFinite(cap) && totalValue > cap + 0.0001) {
-    return `This account is limited to trades up to $${cap.toFixed(2)}. Contact support to request a higher limit.`;
+    const capLabel = usdLabel ? usdLabel(cap) : `$${cap.toFixed(2)}`;
+    return `This account is limited to trades up to ${capLabel}. Contact support to request a higher limit.`;
   }
   return null;
 }

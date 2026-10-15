@@ -62,6 +62,10 @@ export const assets: Asset[] = catalog.map((coin) => ({
 
 export const getAsset = (symbol: string) => assets.find((asset) => asset.symbol === symbol);
 
+// USD-only formatters. These are for internal/catalog data, NOT for
+// anything a signed-in user reads: every user-facing amount must go through
+// src/lib/currency.ts (client) or moneyFormatterFor() from src/lib/fx-server.ts
+// (server) so it renders in the viewer's chosen display currency.
 export const money = (value: number, digits = 2) =>
   Number.isFinite(value)
     ? "$" + value.toLocaleString("en-US", { minimumFractionDigits: digits, maximumFractionDigits: digits })

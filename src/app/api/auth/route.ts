@@ -9,6 +9,7 @@ import { ALLOWED_AVATAR_MIME_TYPES, MAX_AVATAR_BYTES } from "@/lib/profile";
 import { parseDataUrl } from "@/lib/deposits";
 import { currencyForCountry, countryByCode } from "@/lib/countries";
 import { notifyUser } from "@/lib/notify";
+import { moneyFormatterFor } from "@/lib/fx-server";
 import { findReferrer, generateReferralCode, REFERRAL_BONUS_AMOUNT } from "@/lib/referrals";
 import { passwordResetEmailHtml, sendEmail } from "@/lib/email-server";
 import { issueVerificationCode, needsEmailVerification, VERIFICATION_MAX_ATTEMPTS, VERIFICATION_RESEND_COOLDOWN_MS } from "@/lib/email-verification";
@@ -136,21 +137,26 @@ export async function POST(request: NextRequest) {
             { userId: referrer.id, type: "referral_bonus", amount: REFERRAL_BONUS_AMOUNT.toFixed(2), description: `Referral bonus - ${name} signed up with your code` },
           ]);
         });
+        // The bonus amount is written into each recipient's own display
+        // currency - the referrer's preference for their notification, the
+        // new user's (derived from their country at signup) for theirs.
+        const referrerFmt = await moneyFormatterFor(referrer.currency);
         await notifyUser({
           userId: referrer.id,
           type: "referral_bonus",
           title: "Your referral just signed up!",
-          message: `${name} created a AvaTrades account using your referral code. You've both been credited $${REFERRAL_BONUS_AMOUNT.toFixed(2)}.`,
+          message: `${name} created a AvaTrades account using your referral code. You've both been credited ${referrerFmt.money(REFERRAL_BONUS_AMOUNT)}.`,
         });
       }
 
+      const newUserFmt = await moneyFormatterFor(user.currency);
       await notifyUser({
         userId: user.id,
         type: "account_created",
         title: "Welcome to AvaTrades!",
         message: referrer
-          ? `Your account is ready with a $${REFERRAL_BONUS_AMOUNT.toFixed(2)} referral bonus for signing up with ${referrer.name}'s code already credited to your balance. Make a deposit to add more paper trading funds, then explore the markets, place your first trade, or check out the trading bots and copy trading catalog.`
-          : "Your account is ready with a $0.00 balance. Head to Deposit to add paper trading funds, then explore the markets, place your first trade, or check out the trading bots and copy trading catalog whenever you're ready.",
+          ? `Your account is ready with a ${newUserFmt.money(REFERRAL_BONUS_AMOUNT)} referral bonus for signing up with ${referrer.name}'s code already credited to your balance. Make a deposit to add more paper trading funds, then explore the markets, place your first trade, or check out the trading bots and copy trading catalog.`
+          : `Your account is ready with a ${newUserFmt.money(0)} balance. Head to Deposit to add paper trading funds, then explore the markets, place your first trade, or check out the trading bots and copy trading catalog whenever you're ready.`,
       });
       return await setSession(NextResponse.json({ success: true }), user.id);
     }

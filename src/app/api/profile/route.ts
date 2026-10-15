@@ -145,7 +145,12 @@ export async function PATCH(request: NextRequest) {
       }
       if (Object.keys(updates).length === 0) return bad("Nothing to update.");
       const [updated] = await db.update(users).set(updates).where(eq(users.id, user.id)).returning();
-      return NextResponse.json({ success: true, profile: publicProfile(updated) });
+      // When the display currency changes, send back a fresh rate for it so
+      // the "1 USD ≈ X" hint (and every converted amount on the page)
+      // updates immediately instead of showing the previous currency's rate
+      // until the next full reload.
+      const fx = updates.currency ? await getFxRate(updated.currency) : null;
+      return NextResponse.json({ success: true, profile: publicProfile(updated), ...(fx ? { fx } : {}) });
     }
 
     if (action === "changePassword") {

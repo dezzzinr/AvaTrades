@@ -108,7 +108,11 @@ export default function ProfilePage({ onRequireAuth, onProfileUpdated, notify }:
       const result = await patch({ action: "updateProfile", currency });
       setProfile(result.profile);
       setForm((f) => ({ ...f, currency: result.profile.currency }));
-      notify(`Display currency set to ${currency}.`);
+      // The server returns a fresh rate for the newly chosen currency -
+      // without it the "1 USD ≈ X" hint would keep showing the old
+      // currency's rate until the page was reloaded.
+      if (result.fx) setFx(result.fx);
+      notify(`Display currency set to ${result.profile.currency ?? currency}.`);
       onProfileUpdated();
     } catch (err) {
       notify(err instanceof Error ? err.message : "Update failed.", true);

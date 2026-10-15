@@ -5,6 +5,7 @@ import { eq, sql } from "drizzle-orm";
 import { requireAdmin } from "@/lib/auth";
 import { withdrawalMethodLabel } from "@/lib/withdrawals";
 import { notifyUser } from "@/lib/notify";
+import { moneyFormatterFor } from "@/lib/fx-server";
 
 export const dynamic = "force-dynamic";
 const bad = (message: string, status = 400) => NextResponse.json({ error: message }, { status });
@@ -56,13 +57,18 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
       };
     });
 
+    // The notification goes to the user who requested the withdrawal, so the
+    // amount is written in their own display currency (ledger stays USD).
+    const [target] = await db.select({ currency: users.currency }).from(users).where(eq(users.id, result.userId)).limit(1);
+    const userFmt = await moneyFormatterFor(target?.currency);
+
     await notifyUser({
       userId: result.userId,
       type: decision === "approve" ? "withdrawal_approved" : "withdrawal_rejected",
       title: decision === "approve" ? "Withdrawal approved" : "Withdrawal rejected",
       message: decision === "approve"
-        ? `Your $${Number(result.amount).toFixed(2)} ${withdrawalMethodLabel(result.method, result.methodLabel)} withdrawal was approved and marked as sent.`
-        : `Your $${Number(result.amount).toFixed(2)} ${withdrawalMethodLabel(result.method, result.methodLabel)} withdrawal was rejected and the held amount was returned to your balance.${adminNote ? ` Reason: ${adminNote}` : ""}`,
+        ? `Your ${userFmt.money(Number(result.amount))} ${withdrawalMethodLabel(result.method, result.methodLabel)} withdrawal was approved and marked as sent.`
+        : `Your ${userFmt.money(Number(result.amount))} ${withdrawalMethodLabel(result.method, result.methodLabel)} withdrawal was rejected and the held amount was returned to your balance.${adminNote ? ` Reason: ${adminNote}` : ""}`,
     });
 
     return NextResponse.json({ success: true, message: result.message });

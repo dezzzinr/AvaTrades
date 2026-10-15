@@ -3,10 +3,10 @@ import { db } from "@/db";
 import { positions, transactions, users } from "@/db/schema";
 import { and, eq, sql } from "drizzle-orm";
 import { getUser } from "@/lib/auth";
-import { marketPrice } from "@/lib/market";
 import { getMarketSnapshot } from "@/lib/market-server";
 import { positionPnl, realizedPnl, type PositionSide } from "@/lib/trading";
 import { notifyUser } from "@/lib/notify";
+import { moneyFormatterFor } from "@/lib/fx-server";
 
 export const dynamic = "force-dynamic";
 const bad = (message: string, status = 400) => NextResponse.json({ error: message }, { status });
@@ -15,6 +15,9 @@ export async function PATCH(request: NextRequest, { params }: { params: Promise<
   try {
     const user = await getUser(request);
     if (!user) return bad("Session expired. Please refresh the page.", 401);
+    // Formats every amount in this request's messages in the user's own
+    // display currency (chosen on their profile). Ledger math stays USD.
+    const fmt = await moneyFormatterFor(user.currency);
     const { id } = await params;
     const body = await request.json().catch(() => ({}));
     if (body.action !== "close") return bad("Unknown action.");
@@ -42,7 +45,7 @@ export async function PATCH(request: NextRequest, { params }: { params: Promise<
         userId: user.id,
         type: "margin_close",
         amount: pnl.toFixed(2),
-        description: `Closed ${Number(position.leverage)}x ${position.side} ${position.symbol} position at ${marketPrice(asset.price)}`,
+        description: `Closed ${Number(position.leverage)}x ${position.side} ${position.symbol} position at ${fmt.marketPrice(asset.price)}`,
       });
       return { pnl, price: asset.price, symbol: position.symbol, side: position.side, leverage: Number(position.leverage) };
     });
@@ -51,10 +54,10 @@ export async function PATCH(request: NextRequest, { params }: { params: Promise<
       userId: user.id,
       type: "position_closed",
       title: "Position closed",
-      message: `Closed your ${result.leverage}x ${result.side} ${result.symbol} position at ${marketPrice(result.price)} (${result.pnl >= 0 ? "+" : ""}$${result.pnl.toFixed(2)} P&L).`,
+      message: `Closed your ${result.leverage}x ${result.side} ${result.symbol} position at ${fmt.marketPrice(result.price)} (${result.pnl >= 0 ? "+" : ""}${fmt.money(result.pnl)} P&L).`,
     });
 
-    return NextResponse.json({ success: true, message: `Position closed at ${marketPrice(result.price)} (${result.pnl >= 0 ? "+" : ""}$${result.pnl.toFixed(2)} P&L).` });
+    return NextResponse.json({ success: true, message: `Position closed at ${fmt.marketPrice(result.price)} (${result.pnl >= 0 ? "+" : ""}${fmt.money(result.pnl)} P&L).` });
   } catch (error) {
     console.error("Position close:", error);
     return bad(error instanceof Error ? error.message : "Unable to close this position.", 400);

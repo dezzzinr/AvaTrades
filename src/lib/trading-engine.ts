@@ -18,10 +18,46 @@ import { and, eq, inArray, sql } from "drizzle-orm";
 import { db } from "@/db";
 import { holdings, orders, positions, priceAlerts, trades, transactions, users } from "@/db/schema";
 import { spotOrderShouldFill, spotOrderFillPrice, positionCloseEvent, realizedPnl, orderTypeLabel, type PendingOrderType } from "@/lib/trading";
-import { marketPrice } from "@/lib/market";
+import { moneyFormatterFor, type MoneyFormatter } from "@/lib/fx-server";
 import { notifyUser } from "@/lib/notify";
 
 type Tx = Parameters<Parameters<typeof db.transaction>[0]>[0];
+
+// Notification and ledger-description text written by the engine belongs to
+// whichever user the sweep happened to touch, so their display-currency
+// preference has to be looked up rather than read from a request. Rates are
+// cached in-process by moneyFormatterFor, and a failed lookup falls back to
+// USD so a formatting problem can never block a fill or a close.
+async function formatterForCurrency(currency: string | null | undefined): Promise<MoneyFormatter> {
+  try {
+    return await moneyFormatterFor(currency);
+  } catch (error) {
+    console.error("Currency formatter lookup failed, defaulting to USD:", error);
+    return moneyFormatterFor("USD");
+  }
+}
+
+async function formatterFor(userId: string): Promise<MoneyFormatter> {
+  const [row] = await db.select({ currency: users.currency }).from(users).where(eq(users.id, userId)).limit(1);
+  return formatterForCurrency(row?.currency);
+}
+
+// Same, resolved from a position/order id before its transaction opens, so
+// the description stored inside the transaction is already formatted. The
+// transaction still re-selects the row FOR UPDATE and re-validates status.
+async function formatterForPosition(positionId: string): Promise<MoneyFormatter> {
+  const [row] = await db.select({ currency: users.currency })
+    .from(positions).innerJoin(users, eq(users.id, positions.userId))
+    .where(eq(positions.id, positionId)).limit(1);
+  return formatterForCurrency(row?.currency);
+}
+
+async function formatterForOrder(orderId: string): Promise<MoneyFormatter> {
+  const [row] = await db.select({ currency: users.currency })
+    .from(orders).innerJoin(users, eq(users.id, orders.userId))
+    .where(eq(orders.id, orderId)).limit(1);
+  return formatterForCurrency(row?.currency);
+}
 
 // --- Spot fill execution (shared by manual market orders, pending-order
 // fills, and the engine sweep) -------------------------------------------
@@ -115,11 +151,12 @@ export async function evaluateOneOrder(orderId: string, currentPrice: number): P
   // Notified after the transaction commits (plain db, not tx) - this can
   // fire for an arbitrary other user mid-sweep, so the email send is
   // deferred and must never block whichever request triggered the sweep.
+  const fmt = await formatterFor(filled.userId);
   await notifyUser({
     userId: filled.userId,
     type: "order_filled",
     title: `${filled.side === "buy" ? "Buy" : "Sell"} order filled`,
-    message: `Your ${filled.side} order for ${Number(filled.quantity)} ${filled.symbol} filled at ${marketPrice(filled.fillPrice)}.`,
+    message: `Your ${filled.side} order for ${Number(filled.quantity)} ${filled.symbol} filled at ${fmt.marketPrice(filled.fillPrice)}.`,
   });
   return true;
 }
@@ -137,16 +174,20 @@ export async function expireOneOrder(orderId: string): Promise<boolean> {
     return { userId: order.userId, symbol: order.symbol, side: order.side as "buy" | "sell", type: order.type as PendingOrderType, quantity: order.quantity, triggerPrice: order.triggerPrice };
   });
   if (!expired) return false;
+  const fmt = await formatterFor(expired.userId);
   await notifyUser({
     userId: expired.userId,
     type: "order_cancelled",
     title: `${orderTypeLabel(expired.type)} order expired`,
-    message: `Your ${orderTypeLabel(expired.type).toLowerCase()} order to ${expired.side} ${Number(expired.quantity)} ${expired.symbol} at ${marketPrice(Number(expired.triggerPrice))} reached its set duration before filling and was automatically cancelled.`,
+    message: `Your ${orderTypeLabel(expired.type).toLowerCase()} order to ${expired.side} ${Number(expired.quantity)} ${expired.symbol} at ${fmt.marketPrice(Number(expired.triggerPrice))} reached its set duration before filling and was automatically cancelled.`,
   });
   return true;
 }
 
 export async function evaluateOnePosition(positionId: string, currentPrice: number): Promise<boolean> {
+  // Resolved before the transaction so the ledger description written inside
+  // it is already formatted in the owner's display currency.
+  const fmt = await formatterForPosition(positionId);
   const result = await db.transaction(async (tx) => {
     const [position] = await tx.select().from(positions).where(eq(positions.id, positionId)).for("update");
     if (!position || position.status !== "open") return null;
@@ -174,7 +215,7 @@ export async function evaluateOnePosition(positionId: string, currentPrice: numb
       userId: position.userId,
       type: event.reason === "liquidation" ? "position_liquidated" : "position_closed",
       amount: pnl.toFixed(2),
-      description: `${event.reason === "liquidation" ? "Liquidated" : event.reason === "take_profit" ? "Take-profit closed" : "Stop-loss closed"} ${Number(position.leverage)}x ${position.side} ${position.symbol} position at $${event.price}`,
+      description: `${event.reason === "liquidation" ? "Liquidated" : event.reason === "take_profit" ? "Take-profit closed" : "Stop-loss closed"} ${Number(position.leverage)}x ${position.side} ${position.symbol} position at ${fmt.marketPrice(event.price)}`,
     });
     return { userId: position.userId, symbol: position.symbol, side: position.side, leverage: Number(position.leverage), pnl, event };
   });
@@ -185,7 +226,7 @@ export async function evaluateOnePosition(positionId: string, currentPrice: numb
     userId: result.userId,
     type: "position_auto_closed",
     title: `${label}: ${result.symbol} position`,
-    message: `${label} on your ${result.leverage}x ${result.side} ${result.symbol} position at ${marketPrice(event.price)} (${result.pnl >= 0 ? "+" : ""}$${result.pnl.toFixed(2)} P&L).`,
+    message: `${label} on your ${result.leverage}x ${result.side} ${result.symbol} position at ${fmt.marketPrice(event.price)} (${result.pnl >= 0 ? "+" : ""}${fmt.money(result.pnl)} P&L).`,
   });
   return true;
 }
@@ -202,6 +243,9 @@ function closePnl(position: typeof positions.$inferSelect, closePrice: number): 
 // confirmed no take-profit/stop-loss/liquidation price event fired first
 // (those take priority since they're real risk events, not a timer).
 export async function expireOnePosition(positionId: string, currentPrice: number): Promise<boolean> {
+  // Resolved before the transaction so the ledger description written inside
+  // it is already formatted in the owner's display currency.
+  const fmt = await formatterForPosition(positionId);
   const result = await db.transaction(async (tx) => {
     const [position] = await tx.select().from(positions).where(eq(positions.id, positionId)).for("update");
     if (!position || position.status !== "open") return null;
@@ -220,7 +264,7 @@ export async function expireOnePosition(positionId: string, currentPrice: number
       userId: position.userId,
       type: "position_closed",
       amount: pnl.toFixed(2),
-      description: `Duration ended — closed ${Number(position.leverage)}x ${position.side} ${position.symbol} position at $${currentPrice}`,
+      description: `Duration ended — closed ${Number(position.leverage)}x ${position.side} ${position.symbol} position at ${fmt.marketPrice(currentPrice)}`,
     });
     return { userId: position.userId, symbol: position.symbol, side: position.side, leverage: Number(position.leverage), pnl };
   });
@@ -229,7 +273,7 @@ export async function expireOnePosition(positionId: string, currentPrice: number
     userId: result.userId,
     type: "position_auto_closed",
     title: `Duration ended: ${result.symbol} position`,
-    message: `Your ${result.leverage}x ${result.side} ${result.symbol} position reached its set duration and was automatically closed at ${marketPrice(currentPrice)} (${result.pnl >= 0 ? "+" : ""}$${result.pnl.toFixed(2)} P&L).`,
+    message: `Your ${result.leverage}x ${result.side} ${result.symbol} position reached its set duration and was automatically closed at ${fmt.marketPrice(currentPrice)} (${result.pnl >= 0 ? "+" : ""}${fmt.money(result.pnl)} P&L).`,
   });
   return true;
 }
@@ -318,11 +362,12 @@ export async function sweepPriceAlerts(prices: Record<string, number>, userId?: 
       .returning();
     if (!updated) continue; // lost a race with another sweep - already handled
     triggered++;
+    const fmt = await formatterFor(alert.userId);
     await notifyUser({
       userId: alert.userId,
       type: "price_alert_triggered",
       title: `${alert.symbol} ${alert.direction === "above" ? "crossed above" : "dropped below"} your target`,
-      message: `${alert.symbol} just ${alert.direction === "above" ? "rose above" : "fell below"} ${marketPrice(target)} (now ${marketPrice(price)}). This alert has been used up - set a new one if you want to keep watching ${alert.symbol}.`,
+      message: `${alert.symbol} just ${alert.direction === "above" ? "rose above" : "fell below"} ${fmt.marketPrice(target)} (now ${fmt.marketPrice(price)}). This alert has been used up - set a new one if you want to keep watching ${alert.symbol}.`,
     });
   }
   return triggered;
