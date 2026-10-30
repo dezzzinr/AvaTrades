@@ -408,6 +408,28 @@ function AdminPageInner() {
     } catch (error) { notify(error instanceof Error ? error.message : "Something went wrong", true); } finally { setCreateUserBusy(false); }
   };
 
+  const deleteUser = async () => {
+  if (!selectedUserId || !userDetail) return;
+
+  if (!(await confirm({
+    title: `Delete ${userDetail.user.name}'s account?`,
+    message: "This permanently deletes the account and its trading data. This cannot be undone.",
+    confirmLabel: "Delete account",
+    danger: true,
+  }))) return;
+
+  const res = await fetch(`/api/admin/users/${selectedUserId}`, {
+    method: "DELETE",
+  });
+  const result = await res.json();
+
+  if (!res.ok) return notify(result.error || "Unable to delete account.", true);
+
+  notify("Account deleted");
+  closeUser();
+  await loadUsers(userSearch);
+};
+
   const saveUserProfile = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!selectedUserId || editUserBusy) return;
@@ -1166,6 +1188,20 @@ function AdminPageInner() {
                     {userDetail.notifications.length === 0 && <div className="empty-state"><span className="empty-icon"><Bell size={27}/></span><h3>No notifications sent</h3><p>&nbsp;</p></div>}
                   </div>
                 </section>
+
+                <section className="panel admin-panel" style={{ marginBottom: 18, borderColor: "#ef4444" }}>
+  <SectionHeadSimple
+    title="Delete account"
+    subtitle="Permanently remove this account and all of its data"
+  />
+  <button
+    type="button"
+    className="primary-btn full-btn reject-btn"
+    onClick={deleteUser}
+  >
+    Delete account
+  </button>
+</section>
               </div>
             </div>
           </>}

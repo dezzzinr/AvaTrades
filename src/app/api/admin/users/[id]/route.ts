@@ -159,3 +159,30 @@ export async function PATCH(request: NextRequest, { params }: { params: Promise<
     return bad("Unable to update this user.", 500);
   }
 }
+
+
+// DELETE HANDLER
+export async function DELETE(
+  request: NextRequest,
+  { params }: { params: Promise<{ id: string }> },
+) {
+  try {
+    const admin = await requireAdmin(request);
+    if (!admin) return bad("Admin access required.", 403);
+
+    const { id } = await params;
+    if (id === admin.id) return bad("You can't delete your own account.");
+
+    const [user] = await db
+      .delete(users)
+      .where(eq(users.id, id))
+      .returning({ id: users.id, name: users.name });
+
+    if (!user) return bad("User not found.", 404);
+
+    return NextResponse.json({ success: true, user });
+  } catch (error) {
+    console.error("Admin delete user:", error);
+    return bad("Unable to delete this user.", 500);
+  }
+}
