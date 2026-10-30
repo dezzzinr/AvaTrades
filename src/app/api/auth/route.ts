@@ -120,10 +120,10 @@ export async function POST(request: NextRequest) {
         termsAcceptedAt: now,
         privacyAcceptedAt: now,
         currency: currencyForCountry(country),
-        emailVerifiedAt: new Date(), // gates this account behind the email-verification screen until the 4-digit code is entered
+        emailVerifiedAt: null, // gates this account behind the email-verification screen until the 4-digit code is entered
       }).returning();
 
-      // await issueVerificationCode(user as { id: string; name: string; email: string });
+      await issueVerificationCode(user as { id: string; name: string; email: string });
 
       if (referrer) {
         // One-time bonus to both sides, paid from nowhere (paper money) -
