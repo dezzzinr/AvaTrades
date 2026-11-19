@@ -8,15 +8,19 @@ import type { LanguageCode } from "@/lib/i18n";
 // translation API - good enough for UI chrome, no account/billing needed.
 // Chinese needs the regional "zh-CN" pair code; everything else matches our
 // own language codes.
-const MYMEMORY_LANGPAIR: Record<LanguageCode, string> = {
-  en: "en", es: "es", fr: "fr", pt: "pt", ar: "ar", hi: "hi", zh: "zh-CN", ru: "ru",
+const MYMEMORY_LANGPAIR: Partial<Record<LanguageCode, string>> = {
+  en: "en", es: "es", de: "de", fr: "fr", it: "it", pt: "pt", ar: "ar", hi: "hi", zh: "zh-CN", ru: "ru",
 };
 
 const hashOf = (text: string) => createHash("sha256").update(text).digest("hex");
 
 async function translateOne(text: string, language: LanguageCode): Promise<string | null> {
+  const targetLanguage = MYMEMORY_LANGPAIR[language];
+  // MyMemory's `rm` code is listed for Balkan Romani, not Romansh. Leave
+  // Romansh text in English until a provider with genuine Romansh support is configured.
+  if (!targetLanguage) return null;
   try {
-    const url = `https://api.mymemory.translated.net/get?q=${encodeURIComponent(text)}&langpair=en|${MYMEMORY_LANGPAIR[language]}`;
+    const url = `https://api.mymemory.translated.net/get?q=${encodeURIComponent(text)}&langpair=en|${targetLanguage}`;
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), 8000);
     const res = await fetch(url, { signal: controller.signal });
